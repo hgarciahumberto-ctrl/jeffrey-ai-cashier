@@ -71,7 +71,11 @@ function detectLanguage(text) {
       "si",
       "alitas",
       "con hueso",
-      "sin hueso"
+      "sin hueso",
+      "nada más",
+      "nada mas",
+      "eso sería todo",
+      "eso seria todo"
     ])
   ) {
     return "spanish";
@@ -120,18 +124,6 @@ function estimateWingPrice(type, qty) {
   return type === "boneless" ? boneless[qty] || 0 : classic[qty] || 0;
 }
 
-function estimateSidePrice(name) {
-  const prices = {
-    "corn ribs": 6.45,
-    "mozzarella sticks": 7.50,
-    "mac bites": 7.50,
-    fries: 4.15,
-    "sweet potato fries": 4.95,
-    "potato salad": 2.99
-  };
-  return prices[name.toLowerCase()] || 0;
-}
-
 function addItemToOrder(session, item) {
   session.order.items.push(item);
   session.order.subtotalEstimate += item.estimatedPrice || 0;
@@ -158,9 +150,6 @@ function formatOrderSummary(order) {
     .join(". ");
 }
 
-// ----------------------------------
-// Parsing helpers
-// ----------------------------------
 function parseWingInput(text) {
   const lower = normalizeText(text);
 
@@ -225,7 +214,6 @@ function parseSauces(text) {
     }
   }
 
-  // Avoid duplicate "hot" if "buffalo hot" already matched
   if (found.includes("buffalo hot") && found.includes("hot")) {
     return found.filter((s) => s !== "hot");
   }
@@ -280,6 +268,34 @@ function nextQuestionForWings(session) {
       : `Perfect. That order includes ${dips} dipping sauce${dips > 1 ? "s" : ""}. Would you like ranch, blue cheese, chipotle ranch, or jalapeño ranch?`;
   }
   return null;
+}
+
+function isEndOfOrderPhrase(lower) {
+  return containsAny(lower, [
+    "that will be it",
+    "that'll be it",
+    "that is all",
+    "thats all",
+    "that's all",
+    "that is it",
+    "that will be all",
+    "thank you",
+    "thank you thats all",
+    "thank you that's all",
+    "no thats all",
+    "no that's all",
+    "no thank you",
+    "nothing else",
+    "nothing more",
+    "nada más",
+    "nada mas",
+    "eso sería todo",
+    "eso seria todo",
+    "ya sería todo",
+    "ya seria todo",
+    "sería todo",
+    "seria todo"
+  ]);
 }
 
 // ----------------------------------
@@ -542,10 +558,10 @@ app.post("/voice", async (req, res) => {
     }
 
     // ------------------------------
-    // Next item / upsell / recap
+    // Next item / end-of-order
     // ------------------------------
     if (!reply && session.stage === "next_item") {
-      if (containsAny(lower, ["no", "that's all", "thats all", "no thanks", "no gracias", "nada más", "nada mas"])) {
+      if (isEndOfOrderPhrase(lower)) {
         if (!session.order.upsellOffered) {
           session.order.upsellOffered = true;
           session.stage = "upsell";
@@ -561,6 +577,9 @@ app.post("/voice", async (req, res) => {
       }
     }
 
+    // ------------------------------
+    // Upsell
+    // ------------------------------
     if (!reply && session.stage === "upsell") {
       if (containsAny(lower, ["no", "no thanks", "no gracias"])) {
         session.stage = "extras";
@@ -573,6 +592,9 @@ app.post("/voice", async (req, res) => {
       }
     }
 
+    // ------------------------------
+    // Extras
+    // ------------------------------
     if (!reply && session.stage === "extras") {
       session.order.extraSauceAsked = true;
       if (session.order.subtotalEstimate >= 45 && !session.order.paymentWarningGiven) {
@@ -587,6 +609,9 @@ app.post("/voice", async (req, res) => {
       }
     }
 
+    // ------------------------------
+    // Payment
+    // ------------------------------
     if (!reply && session.stage === "payment") {
       if (containsAny(lower, ["no"])) {
         session.stage = "closing";
@@ -599,6 +624,9 @@ app.post("/voice", async (req, res) => {
       }
     }
 
+    // ------------------------------
+    // Recap
+    // ------------------------------
     if (!reply && session.stage === "recap") {
       reply =
         session.language === "spanish"
@@ -607,6 +635,9 @@ app.post("/voice", async (req, res) => {
       session.stage = "confirm_recap";
     }
 
+    // ------------------------------
+    // Confirm recap
+    // ------------------------------
     if (!reply && session.stage === "confirm_recap") {
       if (containsAny(lower, ["yes", "sí", "si", "correct", "correcto"])) {
         session.stage = "order_name";
@@ -623,6 +654,9 @@ app.post("/voice", async (req, res) => {
       }
     }
 
+    // ------------------------------
+    // Order name
+    // ------------------------------
     if (!reply && session.stage === "order_name") {
       session.order.orderName = userSpeech;
       session.stage = "closing";
@@ -632,6 +666,9 @@ app.post("/voice", async (req, res) => {
           : "Perfect. Your order should be ready in about 25 minutes. Thank you for calling Flaps and Racks.";
     }
 
+    // ------------------------------
+    // Closing
+    // ------------------------------
     if (!reply && session.stage === "closing") {
       reply =
         session.language === "spanish"
@@ -639,7 +676,9 @@ app.post("/voice", async (req, res) => {
           : "Thank you for calling Flaps and Racks.";
     }
 
-    // Final fallback to AI, but never for greeting
+    // ------------------------------
+    // Final fallback to AI
+    // ------------------------------
     if (!reply) {
       const completion = await openai.chat.completions.create({
         model: "gpt-4o-mini",
