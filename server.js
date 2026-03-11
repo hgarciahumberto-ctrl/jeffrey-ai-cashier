@@ -140,7 +140,18 @@ function formatOrderSummary(order) {
       if (item.details?.wingType) line += `, ${item.details.wingType}`;
       if (item.details?.quantity) line += `, ${item.details.quantity} pieces`;
       if (item.details?.sauces?.length) line += `, sauces: ${item.details.sauces.join(", ")}`;
-      if (item.details?.dips?.length) line += `, dips: ${item.details.dips.join(", ")}`;
+
+      if (item.details?.dips?.length) {
+        const dipCounts = {};
+        for (const dip of item.details.dips) {
+          dipCounts[dip] = (dipCounts[dip] || 0) + 1;
+        }
+        const dipSummary = Object.entries(dipCounts)
+          .map(([dip, count]) => `${count} ${dip}`)
+          .join(", ");
+        line += `, dips: ${dipSummary}`;
+      }
+
       if (item.details?.side) line += `, side: ${item.details.side}`;
       if (item.details?.drink) line += `, drink: ${item.details.drink}`;
       if (item.details?.notes?.length) line += `, notes: ${item.details.notes.join(", ")}`;
@@ -169,12 +180,7 @@ function parseWingInput(text) {
     ])
   ) {
     wingType = "traditional";
-  } else if (
-    containsAny(lower, [
-      "boneless",
-      "sin hueso"
-    ])
-  ) {
+  } else if (containsAny(lower, ["boneless", "sin hueso"])) {
     wingType = "boneless";
   }
 
@@ -187,8 +193,8 @@ function parseSauces(text) {
 
   const sauceMap = [
     "al pastor",
-    "bbq",
     "bbq chiltepin",
+    "bbq",
     "buffalo hot",
     "buffalo mild",
     "buffalo medium",
@@ -198,13 +204,13 @@ function parseSauces(text) {
     "citrus chipotle",
     "garlic parmesan",
     "green chile",
-    "hot",
     "lime pepper",
     "mango habanero",
-    "mild",
     "pizza",
     "sweet and spicy",
-    "teriyaki"
+    "teriyaki",
+    "hot",
+    "mild"
   ];
 
   const found = [];
@@ -224,23 +230,63 @@ function parseSauces(text) {
   return [...new Set(found)];
 }
 
-function parseDips(text) {
+function parseDipRequest(text, includedCount = 0) {
   const lower = normalizeText(text);
-  const dipMap = [
-    "ranch",
-    "blue cheese",
-    "chipotle ranch",
-    "jalapeno ranch",
-    "jalapeño ranch"
+
+  const dipNames = [
+    { key: "ranch", aliases: ["ranch", "ranches"] },
+    { key: "blue cheese", aliases: ["blue cheese"] },
+    { key: "chipotle ranch", aliases: ["chipotle ranch"] },
+    { key: "jalapeño ranch", aliases: ["jalapeño ranch", "jalapeno ranch"] }
   ];
 
-  const found = [];
-  for (const dip of dipMap) {
-    if (lower.includes(dip)) {
-      found.push(dip.replace("jalapeno", "jalapeño"));
+  const numberWords = {
+    one: 1,
+    two: 2,
+    three: 3,
+    four: 4,
+    un: 1,
+    uno: 1,
+    una: 1,
+    dos: 2,
+    tres: 3,
+    cuatro: 4
+  };
+
+  const result = [];
+
+  for (const dip of dipNames) {
+    for (const alias of dip.aliases) {
+      if (lower.includes(alias)) {
+        let count = 1;
+
+        const digitMatch = lower.match(new RegExp(`\\b([1-4])\\b\\s*${alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+        if (digitMatch) {
+          count = Number(digitMatch[1]);
+        } else {
+          for (const [word, value] of Object.entries(numberWords)) {
+            if (lower.includes(`${word} ${alias}`)) {
+              count = value;
+              break;
+            }
+          }
+        }
+
+        for (let i = 0; i < count; i++) {
+          result.push(dip.key);
+        }
+        break;
+      }
     }
   }
-  return [...new Set(found)];
+
+  // If customer just says "ranch" and they have 2 included dips,
+  // assume they want all included dips as ranch
+  if (result.length === 1 && includedCount > 1) {
+    return Array(includedCount).fill(result[0]);
+  }
+
+  return result;
 }
 
 function nextQuestionForWings(session) {
@@ -264,8 +310,8 @@ function nextQuestionForWings(session) {
   if (!item.details.dips.length) {
     const dips = getIncludedDips(item.details.quantity);
     return session.language === "spanish"
-      ? `Perfecto. Esa orden incluye ${dips} aderezo${dips > 1 ? "s" : ""}. ¿Le gustaría ranch, blue cheese, chipotle ranch o jalapeño ranch?`
-      : `Perfect. That order includes ${dips} dipping sauce${dips > 1 ? "s" : ""}. Would you like ranch, blue cheese, chipotle ranch, or jalapeño ranch?`;
+      ? `Perfecto. Esa orden incluye ${dips} aderezo${dips > 1 ? "s" : ""}. Puede decir, por ejemplo, ${dips === 2 ? "dos ranch o un ranch y un blue cheese" : "ranch, blue cheese, chipotle ranch o jalapeño ranch"}. ¿Qué aderezo le gustaría?`
+      : `Perfect. That order includes ${dips} dipping sauce${dips > 1 ? "s" : ""}. You can say, for example, ${dips === 2 ? "two ranch or one ranch and one blue cheese" : "ranch, blue cheese, chipotle ranch, or jalapeño ranch"}. What dipping sauce would you like?`;
   }
   return null;
 }
@@ -351,9 +397,6 @@ app.post("/voice", async (req, res) => {
   try {
     let reply = "";
 
-    // ------------------------------
-    // First greeting only once
-    // ------------------------------
     if (!session.greeted && !userSpeech) {
       session.greeted = true;
       session.stage = "language";
@@ -361,9 +404,6 @@ app.post("/voice", async (req, res) => {
         "Thank you for calling Flaps and Racks. This is Jeffrey. Would you like to order in English or en Español?";
     }
 
-    // ------------------------------
-    // Language state
-    // ------------------------------
     if (!reply && session.stage === "language") {
       if (userSpeech) {
         session.language = detectLanguage(userSpeech);
@@ -383,9 +423,6 @@ app.post("/voice", async (req, res) => {
       }
     }
 
-    // ------------------------------
-    // To-Go state
-    // ------------------------------
     if (!reply && session.stage === "order_type") {
       if (
         containsAny(lower, [
@@ -414,9 +451,6 @@ app.post("/voice", async (req, res) => {
       }
     }
 
-    // ------------------------------
-    // Item capture state
-    // ------------------------------
     if (!reply && session.stage === "item_capture") {
       const parsedWing = parseWingInput(userSpeech);
 
@@ -495,14 +529,12 @@ app.post("/voice", async (req, res) => {
       }
     }
 
-    // ------------------------------
-    // Wings detail state
-    // ------------------------------
     if (!reply && session.stage === "wings_detail" && session.currentItem?.type === "wings") {
       const item = session.currentItem;
       const parsedWing = parseWingInput(userSpeech);
       const sauces = parseSauces(userSpeech);
-      const dips = parseDips(userSpeech);
+      const includedDipCount = getIncludedDips(item.details.quantity);
+      const parsedDipRequest = parseDipRequest(userSpeech, includedDipCount);
 
       if (!item.details.wingType && parsedWing.wingType) {
         item.details.wingType = parsedWing.wingType;
@@ -519,9 +551,8 @@ app.post("/voice", async (req, res) => {
         item.details.sauces = sauces.slice(0, limit);
       }
 
-      if (item.details.quantity && dips.length && !item.details.dips.length) {
-        const limit = getIncludedDips(item.details.quantity);
-        item.details.dips = dips.slice(0, limit);
+      if (item.details.quantity && parsedDipRequest.length && !item.details.dips.length) {
+        item.details.dips = parsedDipRequest.slice(0, includedDipCount);
       }
 
       const nextQ = nextQuestionForWings(session);
@@ -538,9 +569,6 @@ app.post("/voice", async (req, res) => {
       }
     }
 
-    // ------------------------------
-    // Corn ribs sauce
-    // ------------------------------
     if (!reply && session.stage === "corn_ribs_sauce" && session.currentItem?.name === "Corn Ribs") {
       const sauces = parseSauces(userSpeech);
       if (sauces.length) {
@@ -557,9 +585,6 @@ app.post("/voice", async (req, res) => {
           : "Perfect. What else can I get for you?";
     }
 
-    // ------------------------------
-    // Next item / end-of-order
-    // ------------------------------
     if (!reply && session.stage === "next_item") {
       if (isEndOfOrderPhrase(lower)) {
         if (!session.order.upsellOffered) {
@@ -577,9 +602,6 @@ app.post("/voice", async (req, res) => {
       }
     }
 
-    // ------------------------------
-    // Upsell
-    // ------------------------------
     if (!reply && session.stage === "upsell") {
       if (containsAny(lower, ["no", "no thanks", "no gracias"])) {
         session.stage = "extras";
@@ -592,9 +614,6 @@ app.post("/voice", async (req, res) => {
       }
     }
 
-    // ------------------------------
-    // Extras
-    // ------------------------------
     if (!reply && session.stage === "extras") {
       session.order.extraSauceAsked = true;
       if (session.order.subtotalEstimate >= 45 && !session.order.paymentWarningGiven) {
@@ -609,9 +628,6 @@ app.post("/voice", async (req, res) => {
       }
     }
 
-    // ------------------------------
-    // Payment
-    // ------------------------------
     if (!reply && session.stage === "payment") {
       if (containsAny(lower, ["no"])) {
         session.stage = "closing";
@@ -624,9 +640,6 @@ app.post("/voice", async (req, res) => {
       }
     }
 
-    // ------------------------------
-    // Recap
-    // ------------------------------
     if (!reply && session.stage === "recap") {
       reply =
         session.language === "spanish"
@@ -635,9 +648,6 @@ app.post("/voice", async (req, res) => {
       session.stage = "confirm_recap";
     }
 
-    // ------------------------------
-    // Confirm recap
-    // ------------------------------
     if (!reply && session.stage === "confirm_recap") {
       if (containsAny(lower, ["yes", "sí", "si", "correct", "correcto"])) {
         session.stage = "order_name";
@@ -654,9 +664,6 @@ app.post("/voice", async (req, res) => {
       }
     }
 
-    // ------------------------------
-    // Order name
-    // ------------------------------
     if (!reply && session.stage === "order_name") {
       session.order.orderName = userSpeech;
       session.stage = "closing";
@@ -666,9 +673,6 @@ app.post("/voice", async (req, res) => {
           : "Perfect. Your order should be ready in about 25 minutes. Thank you for calling Flaps and Racks.";
     }
 
-    // ------------------------------
-    // Closing
-    // ------------------------------
     if (!reply && session.stage === "closing") {
       reply =
         session.language === "spanish"
@@ -676,9 +680,6 @@ app.post("/voice", async (req, res) => {
           : "Thank you for calling Flaps and Racks.";
     }
 
-    // ------------------------------
-    // Final fallback to AI
-    // ------------------------------
     if (!reply) {
       const completion = await openai.chat.completions.create({
         model: "gpt-4o-mini",
