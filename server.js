@@ -11,21 +11,19 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
-// -------------------------------
-// In-memory session store
-// -------------------------------
+// ----------------------------------
+// Session Store
+// ----------------------------------
 const callSessions = new Map();
 
 function createEmptyOrder() {
   return {
     items: [],
-    notes: [],
     subtotalEstimate: 0,
     upsellOffered: false,
     extraSauceAsked: false,
     paymentWarningGiven: false,
-    orderName: null,
-    pickupPerson: null
+    orderName: null
   };
 }
 
@@ -38,14 +36,12 @@ function getSession(callSid) {
       orderTypeConfirmed: false,
       currentItem: null,
       order: createEmptyOrder(),
-      lastUserMessage: "",
       createdAt: Date.now()
     });
   }
   return callSessions.get(callSid);
 }
 
-// Cleanup old sessions every 10 minutes
 setInterval(() => {
   const now = Date.now();
   for (const [callSid, session] of callSessions.entries()) {
@@ -55,9 +51,9 @@ setInterval(() => {
   }
 }, 1000 * 60 * 10);
 
-// -------------------------------
+// ----------------------------------
 // Helpers
-// -------------------------------
+// ----------------------------------
 function containsAny(text, words) {
   return words.some((w) => text.includes(w));
 }
@@ -73,15 +69,35 @@ function detectLanguage(text) {
       "para llevar",
       "sí",
       "si",
+      "alitas",
       "con hueso",
-      "sin hueso",
-      "boneless",
-      "alitas"
+      "sin hueso"
     ])
   ) {
     return "spanish";
   }
   return "english";
+}
+
+function normalizeText(text) {
+  return (text || "")
+    .toLowerCase()
+    .replace(/[.,!?]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function getIncludedSauceLimit(qty) {
+  if (qty === 6 || qty === 9) return 1;
+  if (qty === 12) return 2;
+  if (qty === 18) return 3;
+  if (qty === 24) return 4;
+  if (qty === 48) return 8;
+  return 0;
+}
+
+function getIncludedDips(qty) {
+  return qty ? Math.floor(qty / 6) : 0;
 }
 
 function estimateWingPrice(type, qty) {
@@ -116,12 +132,18 @@ function estimateSidePrice(name) {
   return prices[name.toLowerCase()] || 0;
 }
 
+function addItemToOrder(session, item) {
+  session.order.items.push(item);
+  session.order.subtotalEstimate += item.estimatedPrice || 0;
+  session.currentItem = null;
+}
+
 function formatOrderSummary(order) {
-  if (!order.items.length) return "No items yet.";
+  if (!order.items.length) return "No items on the order yet.";
 
   return order.items
-    .map((item, idx) => {
-      let line = `${idx + 1}. ${item.name}`;
+    .map((item) => {
+      let line = item.name;
 
       if (item.details?.wingType) line += `, ${item.details.wingType}`;
       if (item.details?.quantity) line += `, ${item.details.quantity} pieces`;
@@ -136,124 +158,186 @@ function formatOrderSummary(order) {
     .join(". ");
 }
 
-function addItemToOrder(session, item) {
-  session.order.items.push(item);
-  session.order.subtotalEstimate += item.estimatedPrice || 0;
-  session.currentItem = null;
+// ----------------------------------
+// Parsing helpers
+// ----------------------------------
+function parseWingInput(text) {
+  const lower = normalizeText(text);
+
+  const qtyMatch = lower.match(/\b(6|9|12|18|24|48)\b/);
+  const qty = qtyMatch ? Number(qtyMatch[1]) : null;
+
+  let wingType = null;
+  if (
+    containsAny(lower, [
+      "traditional",
+      "classic",
+      "clasicas",
+      "clásicas",
+      "bone in",
+      "bone-in",
+      "con hueso"
+    ])
+  ) {
+    wingType = "traditional";
+  } else if (
+    containsAny(lower, [
+      "boneless",
+      "sin hueso"
+    ])
+  ) {
+    wingType = "boneless";
+  }
+
+  const mentionsWings = containsAny(lower, ["wings", "wing", "alitas"]);
+  return { qty, wingType, mentionsWings };
 }
 
-function getIncludedSauceLimit(qty) {
-  if (qty === 6 || qty === 9) return 1;
-  if (qty === 12) return 2;
-  if (qty === 18) return 3;
-  if (qty === 24) return 4;
-  if (qty === 48) return 8;
-  return 0;
+function parseSauces(text) {
+  const lower = normalizeText(text);
+
+  const sauceMap = [
+    "al pastor",
+    "bbq",
+    "bbq chiltepin",
+    "buffalo hot",
+    "buffalo mild",
+    "buffalo medium",
+    "chocolate chiltepin",
+    "chorizo",
+    "cinnamon roll",
+    "citrus chipotle",
+    "garlic parmesan",
+    "green chile",
+    "hot",
+    "lime pepper",
+    "mango habanero",
+    "mild",
+    "pizza",
+    "sweet and spicy",
+    "teriyaki"
+  ];
+
+  const found = [];
+  for (const sauce of sauceMap) {
+    if (lower.includes(sauce)) {
+      found.push(sauce);
+    }
+  }
+
+  // Avoid duplicate "hot" if "buffalo hot" already matched
+  if (found.includes("buffalo hot") && found.includes("hot")) {
+    return found.filter((s) => s !== "hot");
+  }
+  if (found.includes("buffalo mild") && found.includes("mild")) {
+    return found.filter((s) => s !== "mild");
+  }
+
+  return [...new Set(found)];
 }
 
-function getIncludedDips(qty) {
-  if (!qty) return 0;
-  return Math.floor(qty / 6);
+function parseDips(text) {
+  const lower = normalizeText(text);
+  const dipMap = [
+    "ranch",
+    "blue cheese",
+    "chipotle ranch",
+    "jalapeno ranch",
+    "jalapeño ranch"
+  ];
+
+  const found = [];
+  for (const dip of dipMap) {
+    if (lower.includes(dip)) {
+      found.push(dip.replace("jalapeno", "jalapeño"));
+    }
+  }
+  return [...new Set(found)];
 }
 
-// -------------------------------
-// Jeffrey prompt
-// -------------------------------
+function nextQuestionForWings(session) {
+  const item = session.currentItem;
+  if (!item.details.wingType) {
+    return session.language === "spanish"
+      ? "¿Las quiere tradicionales con hueso o boneless?"
+      : "Would you like traditional bone-in or boneless?";
+  }
+  if (!item.details.quantity) {
+    return session.language === "spanish"
+      ? "¿Cuántas piezas le gustaría? Tenemos 6, 9, 12, 18, 24 o 48."
+      : "How many would you like? We have 6, 9, 12, 18, 24, or 48.";
+  }
+  if (!item.details.sauces.length) {
+    const limit = getIncludedSauceLimit(item.details.quantity);
+    return session.language === "spanish"
+      ? `Perfecto. Esa orden incluye hasta ${limit} salsa${limit > 1 ? "s" : ""}. ¿Qué salsa le gustaría?`
+      : `Perfect. That order includes up to ${limit} sauce${limit > 1 ? "s" : ""}. What sauce would you like?`;
+  }
+  if (!item.details.dips.length) {
+    const dips = getIncludedDips(item.details.quantity);
+    return session.language === "spanish"
+      ? `Perfecto. Esa orden incluye ${dips} aderezo${dips > 1 ? "s" : ""}. ¿Le gustaría ranch, blue cheese, chipotle ranch o jalapeño ranch?`
+      : `Perfect. That order includes ${dips} dipping sauce${dips > 1 ? "s" : ""}. Would you like ranch, blue cheese, chipotle ranch, or jalapeño ranch?`;
+  }
+  return null;
+}
+
+// ----------------------------------
+// AI Prompt
+// ----------------------------------
 const SYSTEM_PROMPT = `
 You are Jeffrey, the phone cashier for Flaps and Racks restaurant in Tucson, Arizona.
 
 You are warm, polite, calm, friendly, and service-oriented.
 You sound like a real restaurant cashier, not a robot.
 
-Speaking rules:
-- Keep responses short.
+Rules:
+- Speak in short, clear sentences.
 - Ask one question at a time.
 - Do not repeat the greeting after the call has started.
-- Do not act like each turn is a new call.
-- Guide the order naturally, step by step.
-- Be confident and helpful.
-- Never sound technical.
+- Do not act like every turn is a new call.
+- Move the order forward naturally.
+- Confirm instead of assuming.
+- Keep the conversation easy to follow.
 - Never use robotic phrases.
 
-Main job:
-You are helping a customer place a To-Go order.
+Restaurant guidance:
+- Default to To-Go.
+- Never offer delivery.
+- If customer says wings, confirm traditional bone-in or boneless.
+- Wing sizes: 6, 9, 12, 18, 24, 48
+- Sauce limit: 1 sauce per 6 pieces
+- Dipping sauces: 1 per 6 pieces
+- Extra sauces: 75 cents and on the side
+- Ribs: half rack = 1 sauce, full rack = up to 2 sauces
+- Popular sauces: Lime Pepper, Garlic Parmesan, Mango Habanero, Green Chile, BBQ Chiltepin
+- Top upsells: corn ribs, mozzarella sticks, mac bites
+- If order is near or above 50 dollars, payment is required before placing the order
+- Only offer upsell once near the end
+- Only recap at the end
+- If customer asks for help or gets frustrated, offer transfer
 
-Important rules:
-- Default to To-Go
-- Never offer delivery
-- If customer says wings, ask traditional bone-in or boneless
-- Only upsell once, near the end
-- Only full recap at the end
-- If customer sounds confused, simplify
-- If customer wants help from a person, offer transfer
-
-Menu logic:
-Wings and boneless sizes:
-6, 9, 12, 18, 24, 48
-
-Sauce limits:
-6 = 1 sauce
-9 = 1 sauce
-12 = 2 sauces
-18 = 3 sauces
-24 = 4 sauces
-48 = 8 sauces
-
-Extra sauces:
-- $0.75
-- on the side only
-
-Dipping sauces:
-- 1 dip per 6 wings/boneless
-- Ranch
-- Blue Cheese
-- Chipotle Ranch
-- Jalapeño Ranch
-
-Ribs:
-- half rack = 1 sauce
-- full rack = 2 sauces max
-
-Popular recommendations:
-- ribs: Green Chile, BBQ Chiltepin
-- corn ribs: Lime Pepper, Garlic Parmesan
-- pork belly: Green Chile, BBQ Chiltepin
-
-Top upsells:
-- corn ribs
-- mozzarella sticks
-- mac bites
-
-Payment rule:
-If the order approaches or exceeds $50, say:
-"Before we continue, our policy requires payment for orders over 50 dollars before we place the order. You can pay over the phone or through a secure text link. Would you like to continue?"
-
-If the customer says they want to place an order:
-- do not greet again
-- move to To-Go confirmation if not already confirmed
-- otherwise move to the next cashier question
-
-Always behave like a cashier following the order process, not a chatbot making small talk.
+Always behave like a cashier following the order process.
 `;
 
-// -------------------------------
-// Main voice route
-// -------------------------------
+// ----------------------------------
+// Main Route
+// ----------------------------------
 app.post("/voice", async (req, res) => {
   const VoiceResponse = twilio.twiml.VoiceResponse;
   const twiml = new VoiceResponse();
 
   const callSid = req.body.CallSid || "unknown-call";
   const userSpeech = (req.body.SpeechResult || "").trim();
-  const lower = userSpeech.toLowerCase();
+  const lower = normalizeText(userSpeech);
   const session = getSession(callSid);
 
   try {
     let reply = "";
 
-    // ---------------------------
-    // First greeting
-    // ---------------------------
+    // ------------------------------
+    // First greeting only once
+    // ------------------------------
     if (!session.greeted && !userSpeech) {
       session.greeted = true;
       session.stage = "language";
@@ -261,20 +345,17 @@ app.post("/voice", async (req, res) => {
         "Thank you for calling Flaps and Racks. This is Jeffrey. Would you like to order in English or en Español?";
     }
 
-    // ---------------------------
-    // Language selection
-    // ---------------------------
+    // ------------------------------
+    // Language state
+    // ------------------------------
     if (!reply && session.stage === "language") {
       if (userSpeech) {
         session.language = detectLanguage(userSpeech);
 
-        if (
-          containsAny(lower, ["english", "inglés", "ingles"])
-        ) {
+        if (containsAny(lower, ["english", "ingles", "inglés"])) {
           session.language = "english";
-        } else if (
-          containsAny(lower, ["español", "espanol", "spanish"])
-        ) {
+        }
+        if (containsAny(lower, ["español", "espanol", "spanish"])) {
           session.language = "spanish";
         }
 
@@ -286,9 +367,9 @@ app.post("/voice", async (req, res) => {
       }
     }
 
-    // ---------------------------
-    // To-Go confirmation
-    // ---------------------------
+    // ------------------------------
+    // To-Go state
+    // ------------------------------
     if (!reply && session.stage === "order_type") {
       if (
         containsAny(lower, [
@@ -299,9 +380,10 @@ app.post("/voice", async (req, res) => {
           "pickup",
           "pick up",
           "para llevar",
-          "quiero ordenar",
           "i want to place an order",
-          "i want to order"
+          "i want to order",
+          "quiero hacer una orden",
+          "quiero ordenar"
         ])
       ) {
         session.orderTypeConfirmed = true;
@@ -311,54 +393,41 @@ app.post("/voice", async (req, res) => {
             ? "Perfecto. ¿Qué le preparo hoy?"
             : "Great. What can I get started for you today?";
       } else if (userSpeech) {
-        // If they skip the answer and start ordering, move on
         session.orderTypeConfirmed = true;
         session.stage = "item_capture";
       }
     }
 
-    // ---------------------------
-    // Item capture
-    // ---------------------------
+    // ------------------------------
+    // Item capture state
+    // ------------------------------
     if (!reply && session.stage === "item_capture") {
-      if (containsAny(lower, ["wings", "wing", "alitas"])) {
+      const parsedWing = parseWingInput(userSpeech);
+
+      if (parsedWing.mentionsWings) {
         session.currentItem = {
           type: "wings",
-          name: null,
+          name: parsedWing.wingType === "boneless" ? "Boneless Wings" : "Traditional Wings",
           details: {
-            wingType: null,
-            quantity: null,
+            wingType: parsedWing.wingType,
+            quantity: parsedWing.qty,
             sauces: [],
             dips: [],
             notes: []
-          }
+          },
+          estimatedPrice:
+            parsedWing.wingType && parsedWing.qty
+              ? estimateWingPrice(parsedWing.wingType, parsedWing.qty)
+              : 0
         };
-        session.stage = "wings_type";
-        reply =
-          session.language === "spanish"
-            ? "¿Las quiere tradicionales con hueso o boneless?"
-            : "Would you like traditional bone-in or boneless?";
-      } else if (containsAny(lower, ["half rack", "full rack", "ribs", "costillas"])) {
-        session.currentItem = {
-          type: "ribs",
-          name: null,
-          details: {
-            size: null,
-            sauces: []
-          }
-        };
-        session.stage = "ribs_size";
-        reply =
-          session.language === "spanish"
-            ? "¿Las quiere media orden o orden completa?"
-            : "Would you like a half rack or a full rack?";
+
+        session.stage = "wings_detail";
+        reply = nextQuestionForWings(session);
       } else if (containsAny(lower, ["corn ribs"])) {
         session.currentItem = {
           type: "side",
           name: "Corn Ribs",
-          details: {
-            sauces: []
-          },
+          details: { sauces: [] },
           estimatedPrice: 6.45
         };
         session.stage = "corn_ribs_sauce";
@@ -370,9 +439,7 @@ app.post("/voice", async (req, res) => {
         addItemToOrder(session, {
           type: "side",
           name: "Mozzarella Sticks",
-          details: {
-            sauces: ["Marinara"]
-          },
+          details: { sauces: ["marinara"] },
           estimatedPrice: 7.50
         });
         session.stage = "next_item";
@@ -392,35 +459,17 @@ app.post("/voice", async (req, res) => {
           session.language === "spanish"
             ? "Perfecto. ¿Qué más le puedo preparar?"
             : "Perfect. What else can I get for you?";
-      } else if (containsAny(lower, ["chicken sandwich", "sandwich de pollo"])) {
-        session.currentItem = {
-          type: "chicken_sandwich",
-          name: "Chicken Sandwich",
-          details: {
-            chickenStyle: null,
-            combo: false,
-            side: null,
-            drink: null,
-            notes: []
-          },
-          estimatedPrice: 8.85
-        };
-        session.stage = "chicken_style";
-        reply =
-          session.language === "spanish"
-            ? "¿Le gustaría el pollo a la parrilla o empanizado?"
-            : "Would you like the chicken grilled or fried?";
       } else {
         const completion = await openai.chat.completions.create({
           model: "gpt-4o-mini",
-          temperature: 0.4,
+          temperature: 0.3,
           messages: [
             { role: "system", content: SYSTEM_PROMPT },
             {
               role: "system",
-              content: `Current stage: ${session.stage}. Language: ${session.language || "english"}. Order summary so far: ${formatOrderSummary(session.order)}`
+              content: `Language: ${session.language || "english"}. Stage: ${session.stage}. Current order: ${formatOrderSummary(session.order)}`
             },
-            { role: "user", content: userSpeech || "Ask what the customer would like to order." }
+            { role: "user", content: userSpeech || "Ask what the customer wants to order." }
           ]
         });
 
@@ -430,64 +479,41 @@ app.post("/voice", async (req, res) => {
       }
     }
 
-    // ---------------------------
-    // Wings flow
-    // ---------------------------
-    if (!reply && session.stage === "wings_type" && session.currentItem?.type === "wings") {
-      if (containsAny(lower, ["bone", "traditional", "classic", "clasicas", "con hueso"])) {
-        session.currentItem.details.wingType = "traditional";
-        session.currentItem.name = "Traditional Wings";
-        session.stage = "wings_quantity";
-        reply =
-          session.language === "spanish"
-            ? "¿Cuántas piezas le gustaría? Tenemos 6, 9, 12, 18, 24 o 48."
-            : "How many would you like? We have 6, 9, 12, 18, 24, or 48.";
-      } else if (containsAny(lower, ["boneless", "sin hueso"])) {
-        session.currentItem.details.wingType = "boneless";
-        session.currentItem.name = "Boneless Wings";
-        session.stage = "wings_quantity";
-        reply =
-          session.language === "spanish"
-            ? "¿Cuántas piezas le gustaría? Tenemos 6, 9, 12, 18, 24 o 48."
-            : "How many would you like? We have 6, 9, 12, 18, 24, or 48.";
-      }
-    }
+    // ------------------------------
+    // Wings detail state
+    // ------------------------------
+    if (!reply && session.stage === "wings_detail" && session.currentItem?.type === "wings") {
+      const item = session.currentItem;
+      const parsedWing = parseWingInput(userSpeech);
+      const sauces = parseSauces(userSpeech);
+      const dips = parseDips(userSpeech);
 
-    if (!reply && session.stage === "wings_quantity" && session.currentItem?.type === "wings") {
-      const qtyMatch = lower.match(/\b(6|9|12|18|24|48)\b/);
-      if (qtyMatch) {
-        const qty = Number(qtyMatch[1]);
-        session.currentItem.details.quantity = qty;
-        session.currentItem.estimatedPrice = estimateWingPrice(
-          session.currentItem.details.wingType,
-          qty
-        );
-        session.stage = "wings_sauces";
-        const sauceLimit = getIncludedSauceLimit(qty);
-        reply =
-          session.language === "spanish"
-            ? `Perfecto. Esa orden incluye hasta ${sauceLimit} salsa${sauceLimit > 1 ? "s" : ""}. ¿Qué salsa le gustaría?`
-            : `Perfect. That order includes up to ${sauceLimit} sauce${sauceLimit > 1 ? "s" : ""}. What sauce would you like?`;
+      if (!item.details.wingType && parsedWing.wingType) {
+        item.details.wingType = parsedWing.wingType;
+        item.name = parsedWing.wingType === "boneless" ? "Boneless Wings" : "Traditional Wings";
       }
-    }
 
-    if (!reply && session.stage === "wings_sauces" && session.currentItem?.type === "wings") {
-      if (userSpeech) {
-        const sauceLimit = getIncludedSauceLimit(session.currentItem.details.quantity);
-        session.currentItem.details.sauces = [userSpeech];
-        session.stage = "wings_dips";
-        const dips = getIncludedDips(session.currentItem.details.quantity);
-        reply =
-          session.language === "spanish"
-            ? `Perfecto. Esa orden incluye ${dips} aderezo${dips > 1 ? "s" : ""}. ¿Le gustaría ranch, blue cheese, chipotle ranch o jalapeño ranch?`
-            : `Perfect. That order includes ${dips} dipping sauce${dips > 1 ? "s" : ""}. Would you like ranch, blue cheese, chipotle ranch, or jalapeño ranch?`;
+      if (!item.details.quantity && parsedWing.qty) {
+        item.details.quantity = parsedWing.qty;
+        item.estimatedPrice = estimateWingPrice(item.details.wingType || "traditional", parsedWing.qty);
       }
-    }
 
-    if (!reply && session.stage === "wings_dips" && session.currentItem?.type === "wings") {
-      if (userSpeech) {
-        session.currentItem.details.dips = [userSpeech];
-        addItemToOrder(session, session.currentItem);
+      if (item.details.quantity && sauces.length && !item.details.sauces.length) {
+        const limit = getIncludedSauceLimit(item.details.quantity);
+        item.details.sauces = sauces.slice(0, limit);
+      }
+
+      if (item.details.quantity && dips.length && !item.details.dips.length) {
+        const limit = getIncludedDips(item.details.quantity);
+        item.details.dips = dips.slice(0, limit);
+      }
+
+      const nextQ = nextQuestionForWings(session);
+
+      if (nextQ) {
+        reply = nextQ;
+      } else {
+        addItemToOrder(session, item);
         session.stage = "next_item";
         reply =
           session.language === "spanish"
@@ -496,139 +522,30 @@ app.post("/voice", async (req, res) => {
       }
     }
 
-    // ---------------------------
-    // Ribs flow
-    // ---------------------------
-    if (!reply && session.stage === "ribs_size" && session.currentItem?.type === "ribs") {
-      if (containsAny(lower, ["half", "media"])) {
-        session.currentItem.details.size = "half rack";
-        session.currentItem.name = "Half Rack Ribs";
-        session.currentItem.estimatedPrice = 13.25;
-        session.stage = "ribs_sauces";
-        reply =
-          session.language === "spanish"
-            ? "Perfecto. La media orden incluye una salsa. ¿Qué salsa le gustaría?"
-            : "Perfect. The half rack includes one sauce. What sauce would you like?";
-      } else if (containsAny(lower, ["full", "completa"])) {
-        session.currentItem.details.size = "full rack";
-        session.currentItem.name = "Full Rack Ribs";
-        session.currentItem.estimatedPrice = 20.99;
-        session.stage = "ribs_sauces";
-        reply =
-          session.language === "spanish"
-            ? "Perfecto. La orden completa incluye hasta dos salsas. ¿Qué salsa le gustaría?"
-            : "Perfect. The full rack includes up to two sauces. What sauce would you like?";
-      }
-    }
-
-    if (!reply && session.stage === "ribs_sauces" && session.currentItem?.type === "ribs") {
-      if (userSpeech) {
-        session.currentItem.details.sauces = [userSpeech];
-        addItemToOrder(session, session.currentItem);
-        session.stage = "next_item";
-        reply =
-          session.language === "spanish"
-            ? "Perfecto. ¿Qué más le puedo preparar?"
-            : "Perfect. What else can I get for you?";
-      }
-    }
-
-    // ---------------------------
-    // Corn ribs flow
-    // ---------------------------
+    // ------------------------------
+    // Corn ribs sauce
+    // ------------------------------
     if (!reply && session.stage === "corn_ribs_sauce" && session.currentItem?.name === "Corn Ribs") {
-      if (userSpeech) {
+      const sauces = parseSauces(userSpeech);
+      if (sauces.length) {
+        session.currentItem.details.sauces = [sauces[0]];
+      } else if (userSpeech) {
         session.currentItem.details.sauces = [userSpeech];
-        addItemToOrder(session, session.currentItem);
-        session.stage = "next_item";
-        reply =
-          session.language === "spanish"
-            ? "Perfecto. ¿Qué más le puedo preparar?"
-            : "Perfect. What else can I get for you?";
       }
+
+      addItemToOrder(session, session.currentItem);
+      session.stage = "next_item";
+      reply =
+        session.language === "spanish"
+          ? "Perfecto. ¿Qué más le puedo preparar?"
+          : "Perfect. What else can I get for you?";
     }
 
-    // ---------------------------
-    // Chicken sandwich flow
-    // ---------------------------
-    if (!reply && session.stage === "chicken_style" && session.currentItem?.type === "chicken_sandwich") {
-      if (containsAny(lower, ["grilled", "parrilla"])) {
-        session.currentItem.details.chickenStyle = "grilled";
-        session.stage = "chicken_mods";
-        reply =
-          session.language === "spanish"
-            ? "El chicken sandwich viene con queso, mayonesa, lechuga, cebolla, tomate y pepinillos. ¿Le gustaría dejarlo así o quitar algo?"
-            : "The chicken sandwich comes with cheese, mayo, lettuce, onion, tomato, and pickles. Would you like to leave it as it comes or remove anything?";
-      } else if (containsAny(lower, ["fried", "empanizado", "frito"])) {
-        session.currentItem.details.chickenStyle = "fried";
-        session.stage = "chicken_mods";
-        reply =
-          session.language === "spanish"
-            ? "El chicken sandwich viene con queso, mayonesa, lechuga, cebolla, tomate y pepinillos. ¿Le gustaría dejarlo así o quitar algo?"
-            : "The chicken sandwich comes with cheese, mayo, lettuce, onion, tomato, and pickles. Would you like to leave it as it comes or remove anything?";
-      }
-    }
-
-    if (!reply && session.stage === "chicken_mods" && session.currentItem?.type === "chicken_sandwich") {
-      if (userSpeech) {
-        session.currentItem.details.notes.push(userSpeech);
-        session.stage = "chicken_combo";
-        reply =
-          session.language === "spanish"
-            ? "¿Le gustaría hacerlo combo con papas y bebida?"
-            : "Would you like to make it a combo with fries and a drink?";
-      }
-    }
-
-    if (!reply && session.stage === "chicken_combo" && session.currentItem?.type === "chicken_sandwich") {
-      if (containsAny(lower, ["yes", "sí", "si", "combo"])) {
-        session.currentItem.details.combo = true;
-        session.currentItem.estimatedPrice = 12.35;
-        session.stage = "combo_side";
-        reply =
-          session.language === "spanish"
-            ? "¿Le gustaría papas regulares, sweet potato fries o potato salad?"
-            : "Would you like regular fries, sweet potato fries, or potato salad?";
-      } else if (containsAny(lower, ["no"])) {
-        addItemToOrder(session, session.currentItem);
-        session.stage = "next_item";
-        reply =
-          session.language === "spanish"
-            ? "Perfecto. ¿Qué más le puedo preparar?"
-            : "Perfect. What else can I get for you?";
-      }
-    }
-
-    if (!reply && session.stage === "combo_side" && session.currentItem) {
-      if (userSpeech) {
-        session.currentItem.details.side = userSpeech;
-        session.stage = "combo_drink";
-        reply =
-          session.language === "spanish"
-            ? "¿Qué bebida le gustaría?"
-            : "What drink would you like?";
-      }
-    }
-
-    if (!reply && session.stage === "combo_drink" && session.currentItem) {
-      if (userSpeech) {
-        session.currentItem.details.drink = userSpeech;
-        addItemToOrder(session, session.currentItem);
-        session.stage = "next_item";
-        reply =
-          session.language === "spanish"
-            ? "Perfecto. ¿Qué más le puedo preparar?"
-            : "Perfect. What else can I get for you?";
-      }
-    }
-
-    // ---------------------------
+    // ------------------------------
     // Next item / upsell / recap
-    // ---------------------------
+    // ------------------------------
     if (!reply && session.stage === "next_item") {
-      if (
-        containsAny(lower, ["no", "that's all", "thats all", "nada más", "nada mas", "ya"])
-      ) {
+      if (containsAny(lower, ["no", "that's all", "thats all", "no thanks", "no gracias", "nada más", "nada mas"])) {
         if (!session.order.upsellOffered) {
           session.order.upsellOffered = true;
           session.stage = "upsell";
@@ -645,9 +562,7 @@ app.post("/voice", async (req, res) => {
     }
 
     if (!reply && session.stage === "upsell") {
-      if (
-        containsAny(lower, ["no", "no thanks", "no gracias"])
-      ) {
+      if (containsAny(lower, ["no", "no thanks", "no gracias"])) {
         session.stage = "extras";
         reply =
           session.language === "spanish"
@@ -660,39 +575,35 @@ app.post("/voice", async (req, res) => {
 
     if (!reply && session.stage === "extras") {
       session.order.extraSauceAsked = true;
-      session.stage = "payment_check";
-
       if (session.order.subtotalEstimate >= 45 && !session.order.paymentWarningGiven) {
         session.order.paymentWarningGiven = true;
+        session.stage = "payment";
         reply =
           session.language === "spanish"
             ? "Antes de continuar, nuestra política requiere pago para órdenes de más de 50 dólares antes de enviarla. Puede pagar por teléfono o por un enlace seguro por mensaje. ¿Desea continuar?"
             : "Before we continue, our policy requires payment for orders over 50 dollars before we place the order. You can pay over the phone or through a secure text link. Would you like to continue?";
       } else {
-        session.stage = "final_recap";
+        session.stage = "recap";
       }
     }
 
-    if (!reply && session.stage === "payment_check") {
-      if (containsAny(lower, ["yes", "sí", "si"])) {
-        session.stage = "final_recap";
-      } else if (containsAny(lower, ["no"])) {
+    if (!reply && session.stage === "payment") {
+      if (containsAny(lower, ["no"])) {
+        session.stage = "closing";
         reply =
           session.language === "spanish"
-            ? "No hay problema. También puede hacer su orden en línea en flapsandracks.com."
+            ? "No hay problema. También puede hacer la orden en flapsandracks.com."
             : "No problem. You can also place the order online at flapsandracks.com.";
-        session.stage = "closing";
       } else {
-        session.stage = "final_recap";
+        session.stage = "recap";
       }
     }
 
-    if (!reply && session.stage === "final_recap") {
-      const summary = formatOrderSummary(session.order);
+    if (!reply && session.stage === "recap") {
       reply =
         session.language === "spanish"
-          ? `Permítame confirmar su orden. ${summary}. ¿Está todo correcto?`
-          : `Let me confirm your order. ${summary}. Is everything correct?`;
+          ? `Permítame confirmar su orden. ${formatOrderSummary(session.order)}. ¿Está todo correcto?`
+          : `Let me confirm your order. ${formatOrderSummary(session.order)}. Is everything correct?`;
       session.stage = "confirm_recap";
     }
 
@@ -707,20 +618,18 @@ app.post("/voice", async (req, res) => {
         session.stage = "item_capture";
         reply =
           session.language === "spanish"
-            ? "Claro. Dígame qué le gustaría corregir."
+            ? "Claro. Dígame qué quiere corregir."
             : "Of course. Tell me what you would like to correct.";
       }
     }
 
     if (!reply && session.stage === "order_name") {
-      if (userSpeech) {
-        session.order.orderName = userSpeech;
-        session.stage = "closing";
-        reply =
-          session.language === "spanish"
-            ? `Perfecto. La orden estará lista en aproximadamente 25 minutos. Gracias por llamar a Flaps and Racks.`
-            : `Perfect. Your order should be ready in about 25 minutes. Thank you for calling Flaps and Racks.`;
-      }
+      session.order.orderName = userSpeech;
+      session.stage = "closing";
+      reply =
+        session.language === "spanish"
+          ? "Perfecto. Su orden estará lista en aproximadamente 25 minutos. Gracias por llamar a Flaps and Racks."
+          : "Perfect. Your order should be ready in about 25 minutes. Thank you for calling Flaps and Racks.";
     }
 
     if (!reply && session.stage === "closing") {
@@ -730,24 +639,24 @@ app.post("/voice", async (req, res) => {
           : "Thank you for calling Flaps and Racks.";
     }
 
-    // Fallback to AI if needed
+    // Final fallback to AI, but never for greeting
     if (!reply) {
       const completion = await openai.chat.completions.create({
         model: "gpt-4o-mini",
-        temperature: 0.4,
+        temperature: 0.3,
         messages: [
           { role: "system", content: SYSTEM_PROMPT },
           {
             role: "system",
-            content: `Current stage: ${session.stage}. Language: ${session.language || "english"}. Order summary so far: ${formatOrderSummary(session.order)}`
+            content: `Current stage: ${session.stage}. Language: ${session.language || "english"}. Current order: ${formatOrderSummary(session.order)}`
           },
-          { role: "user", content: userSpeech || "Continue the order naturally." }
+          { role: "user", content: userSpeech || "Continue the order naturally without greeting again." }
         ]
       });
 
       reply =
         completion.choices?.[0]?.message?.content?.trim() ||
-        "How can I help you today?";
+        "What can I get started for you today?";
     }
 
     const gather = twiml.gather({
