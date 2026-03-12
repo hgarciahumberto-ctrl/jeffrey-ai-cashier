@@ -192,7 +192,6 @@ function parseWingInput(text) {
       "traditional",
       "classic",
       "clasicas",
-      "clasicas",
       "bone in",
       "bone-in",
       "con hueso"
@@ -343,7 +342,7 @@ function parseDipRequest(text, includedCount = 0) {
         "todo ranch",
         "todos ranch"
       ]) ||
-      !lower.includes(" and ") && !lower.includes(" y ")
+      (!lower.includes(" and ") && !lower.includes(" y "))
     ) {
       return Array(includedCount).fill(result[0]);
     }
@@ -537,7 +536,18 @@ Always behave like a cashier following the order process.
 `;
 
 // ----------------------------------
-// Main Route
+// Health Routes
+// ----------------------------------
+app.get("/", (_req, res) => {
+  res.send("Jeffrey AI cashier is running.");
+});
+
+app.get("/voice", (_req, res) => {
+  res.type("text/plain").send("Voice endpoint is live.");
+});
+
+// ----------------------------------
+// Main Voice Route
 // ----------------------------------
 app.post("/voice", async (req, res) => {
   const VoiceResponse = twilio.twiml.VoiceResponse;
@@ -547,6 +557,13 @@ app.post("/voice", async (req, res) => {
   const userSpeech = (req.body.SpeechResult || "").trim();
   const lower = normalizeText(userSpeech);
   const session = getSession(callSid);
+
+  console.log("Incoming voice webhook:", {
+    callSid: req.body.CallSid,
+    speech: req.body.SpeechResult,
+    from: req.body.From,
+    to: req.body.To
+  });
 
   try {
     let reply = "";
@@ -742,8 +759,8 @@ app.post("/voice", async (req, res) => {
           dips.length
         ) {
           reply = session.language === "spanish"
-            ? `Perfecto. Ya anoté los aderezos. Ahora, ¿qué salsa le gustaría para las alitas?`
-            : `Perfect. I got the dips. Now, what sauce would you like for the wings?`;
+            ? "Perfecto. Ya anoté los aderezos. Ahora, ¿qué salsa le gustaría para las alitas?"
+            : "Perfect. I got the dips. Now, what sauce would you like for the wings?";
         }
 
         if (
@@ -998,10 +1015,6 @@ app.post("/voice", async (req, res) => {
     res.type("text/xml");
     res.status(200).send(twiml.toString());
   }
-});
-
-app.get("/", (_req, res) => {
-  res.send("Jeffrey AI cashier is running.");
 });
 
 const PORT = process.env.PORT || 8080;
