@@ -1,1030 +1,1042 @@
-import express from "express";
-import OpenAI from "openai";
-import twilio from "twilio";
+"use strict";
+
+/**
+ * Demo Mode Jeffrey 1.2
+ * Presentation-first AI cashier backend for Flaps & Racks
+ *
+ * What this server does:
+ * - Keeps lightweight in-memory sessions by callId
+ * - Handles one polished demo order path
+ * - Uses AI for fluid conversation, but keeps local memory/state
+ * - Prevents robotic looping
+ * - Supports English / Spanish choice
+ *
+ * Demo scope:
+ * - greeting
+ * - language choice
+ * - wings order
+ * - sauces
+ * - dipping sauces
+ * - one upsell
+ * - recap
+ * - customer name
+ *
+ * Notes:
+ * - This is NOT the final production cashier
+ * - Sessions are stored in memory only
+ * - If Railway restarts, sessions are lost
+ * - Good for owner demo / pilot proof of concept
+ */
+
+const express = require("express");
+const cors = require("cors");
+const OpenAI = require("openai");
 
 const app = express();
+app.use(cors());
+app.use(express.json({ limit: "2mb" }));
 
-app.use(express.urlencoded({ extended: false }));
-app.use(express.json());
+const PORT = process.env.PORT || 3000;
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+const MODEL = process.env.OPENAI_MODEL || "gpt-4.1-mini";
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
-});
-
-// ----------------------------------
-// Session Store
-// ----------------------------------
-const callSessions = new Map();
-
-function createEmptyOrder() {
-  return {
-    items: [],
-    subtotalEstimate: 0,
-    upsellOffered: false,
-    extraSauceAsked: false,
-    paymentWarningGiven: false,
-    orderName: null,
-    extraRequests: []
-  };
+if (!OPENAI_API_KEY) {
+  console.error("Missing OPENAI_API_KEY in environment variables.");
+  process.exit(1);
 }
 
-function getSession(callSid) {
-  if (!callSessions.has(callSid)) {
-    callSessions.set(callSid, {
-      greeted: false,
-      language: null,
-      stage: "greeting",
-      orderTypeConfirmed: false,
-      currentItem: null,
-      order: createEmptyOrder(),
-      createdAt: Date.now()
-    });
+const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
+
+/**
+ * -----------------------------
+ * In-memory session store
+ * -----------------------------
+ */
+const sessions = new Map();
+
+/**
+ * -----------------------------
+ * Demo menu knowledge
+ * -----------------------------
+ */
+const DEMO_MENU = {
+  wingStyles: ["traditional", "boneless"],
+  wingQuantities: [6, 8, 10, 12, 16, 20, 24, 30, 40, 50],
+  wingSauces: [
+    "buffalo mild",
+    "buffalo hot",
+    "lime pepper",
+    "garlic parmesan",
+    "bbq",
+    "mango habanero",
+    "teriyaki",
+    "sweet and spicy",
+    "green chile",
+    "bbq chiltepin",
+    "citrus chipotle",
+    "chocolate chiltepin",
+    "plain"
+  ],
+  dipSauces: ["ranch", "blue cheese"],
+  upsells: ["fries", "drink", "corn ribs", "mozzarella sticks"]
+};
+
+/**
+ * -----------------------------
+ * Utility helpers
+ * -----------------------------
+ */
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function safeJsonParse(value, fallback = null) {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return fallback;
   }
-  return callSessions.get(callSid);
 }
 
-setInterval(() => {
-  const now = Date.now();
-  for (const [callSid, session] of callSessions.entries()) {
-    if (now - session.createdAt > 1000 * 60 * 60) {
-      callSessions.delete(callSid);
-    }
-  }
-}, 1000 * 60 * 10);
-
-// ----------------------------------
-// Helpers
-// ----------------------------------
-function stripAccents(text) {
-  return (text || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-}
-
-function normalizeText(text) {
-  return stripAccents(text || "")
+function normalizeText(text = "") {
+  return String(text)
     .toLowerCase()
-    .replace(/[.,!?]/g, " ")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\w\s&']/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
 
-function containsAny(text, words) {
-  return words.some((w) => text.includes(w));
+function titleCase(text = "") {
+  return String(text)
+    .split(" ")
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
 }
 
-function detectLanguage(text) {
-  const lower = normalizeText(text);
-  if (
-    containsAny(lower, [
-      "espanol",
-      "quiero",
-      "orden",
-      "para llevar",
-      "si",
-      "alitas",
-      "con hueso",
-      "sin hueso",
-      "nada mas",
-      "eso seria todo"
-    ])
-  ) {
-    return "spanish";
+function createSession(callId) {
+  return {
+    callId,
+    createdAt: nowIso(),
+    updatedAt: nowIso(),
+
+    language: null, // "english" | "spanish"
+    stage: "language_choice",
+
+    order: {
+      toGo: true,
+      items: [],
+      dips: [],
+      customerName: null
+    },
+
+    currentItem: {
+      category: "wings",
+      quantity: null,
+      style: null,
+      sauces: []
+    },
+
+    askHistory: [],
+    lastQuestionKey: null,
+    repeatCount: 0,
+    turns: 0,
+    recapDone: false,
+    upsellAttempted: false,
+    callClosed: false
+  };
+}
+
+function getOrCreateSession(callId) {
+  if (!callId) {
+    throw new Error("callId is required");
   }
-  return "english";
+  if (!sessions.has(callId)) {
+    sessions.set(callId, createSession(callId));
+  }
+  return sessions.get(callId);
 }
 
-function getIncludedSauceLimit(qty) {
-  if (qty === 6 || qty === 9) return 1;
-  if (qty === 12) return 2;
-  if (qty === 18) return 3;
-  if (qty === 24) return 4;
-  if (qty === 48) return 8;
-  return 0;
+function saveSession(session) {
+  session.updatedAt = nowIso();
+  sessions.set(session.callId, session);
 }
 
-function getIncludedDips(qty) {
-  return qty ? Math.floor(qty / 6) : 0;
+function ask(session, questionKey) {
+  if (session.lastQuestionKey === questionKey) {
+    session.repeatCount += 1;
+  } else {
+    session.repeatCount = 0;
+  }
+
+  session.lastQuestionKey = questionKey;
+  session.askHistory.push({
+    at: nowIso(),
+    questionKey
+  });
 }
 
-function estimateWingPrice(type, qty) {
-  const traditional = {
-    6: 10.10,
-    9: 14.20,
-    12: 18.30,
-    18: 23.65,
-    24: 30.65,
-    48: 58.50
+function addWingItemToOrder(session) {
+  const item = {
+    category: "wings",
+    quantity: session.currentItem.quantity,
+    style: session.currentItem.style,
+    sauces: [...session.currentItem.sauces]
   };
-  const boneless = {
-    6: 9.05,
-    9: 13.35,
-    12: 16.45,
-    18: 22.65,
-    24: 28.85,
-    48: 56.85
-  };
-  return type === "boneless" ? boneless[qty] || 0 : traditional[qty] || 0;
-}
 
-function addItemToOrder(session, item) {
   session.order.items.push(item);
-  session.order.subtotalEstimate += item.estimatedPrice || 0;
-  session.currentItem = null;
+
+  session.currentItem = {
+    category: "wings",
+    quantity: null,
+    style: null,
+    sauces: []
+  };
 }
 
-function summarizeCountedList(items) {
-  const counts = {};
-  for (const item of items) {
-    counts[item] = (counts[item] || 0) + 1;
-  }
-  return Object.entries(counts)
-    .map(([name, count]) => `${count} ${name}`)
-    .join(", ");
-}
-
-function formatOrderSummary(order) {
-  if (!order.items.length && !order.extraRequests.length) {
-    return "No items on the order yet.";
-  }
-
-  const lines = [];
-
-  for (const item of order.items) {
-    let line = item.name;
-
-    if (item.details?.wingType) line += `, ${item.details.wingType}`;
-    if (item.details?.quantity) line += `, ${item.details.quantity} pieces`;
-
-    if (item.details?.sauces?.length) {
-      line += `, sauces: ${item.details.sauces.join(", ")}`;
-    } else if (item.details?.saucesConfirmed) {
-      line += `, no sauce`;
+function summarizeOrder(order, language = "english") {
+  const itemParts = order.items.map((item) => {
+    const sauces = item.sauces.length ? item.sauces.join(" and ") : "plain";
+    if (language === "spanish") {
+      return `${item.quantity} alitas ${item.style === "traditional" ? "tradicionales" : "boneless"} con ${sauces}`;
     }
+    return `${item.quantity} ${item.style} wings with ${sauces}`;
+  });
 
-    if (item.details?.dips?.length) {
-      line += `, dips: ${summarizeCountedList(item.details.dips)}`;
-    } else if (item.details?.dipsConfirmed) {
-      line += `, no dip`;
-    }
+  const dipsPart = order.dips.length
+    ? language === "spanish"
+      ? `dips: ${order.dips.map((d) => `${d.quantity} ${d.type}`).join(", ")}`
+      : `dips: ${order.dips.map((d) => `${d.quantity} ${d.type}`).join(", ")}`
+    : language === "spanish"
+      ? "sin dips"
+      : "no dips";
 
-    if (item.details?.side) line += `, side: ${item.details.side}`;
-    if (item.details?.drink) line += `, drink: ${item.details.drink}`;
-    if (item.details?.notes?.length) line += `, notes: ${item.details.notes.join(", ")}`;
+  const namePart = order.customerName
+    ? language === "spanish"
+      ? `a nombre de ${order.customerName}`
+      : `under ${order.customerName}`
+    : language === "spanish"
+      ? "sin nombre aun"
+      : "no name yet";
 
-    lines.push(line);
-  }
-
-  if (order.extraRequests.length) {
-    lines.push(`extra sauces on the side: ${summarizeCountedList(order.extraRequests)}`);
-  }
-
-  return lines.join(". ");
+  return `${itemParts.join("; ")}; ${dipsPart}; ${namePart}`;
 }
 
-function parseWingInput(text) {
-  const lower = normalizeText(text);
-
-  const qtyMatch = lower.match(/\b(6|9|12|18|24|48)\b/);
-  const qty = qtyMatch ? Number(qtyMatch[1]) : null;
-
-  let wingType = null;
-  if (
-    containsAny(lower, [
-      "traditional",
-      "classic",
-      "clasicas",
-      "bone in",
-      "bone-in",
-      "con hueso"
-    ])
-  ) {
-    wingType = "traditional";
-  } else if (containsAny(lower, ["boneless", "sin hueso"])) {
-    wingType = "boneless";
-  }
-
-  const mentionsWings = containsAny(lower, ["wings", "wing", "alitas"]);
-  return { qty, wingType, mentionsWings };
-}
-
-function parseSauces(text) {
-  const lower = normalizeText(text);
-
-  const sauceAliases = [
-    { key: "al pastor", aliases: ["al pastor"] },
-    { key: "bbq chiltepin", aliases: ["bbq chiltepin", "barbecue chiltepin"] },
-    { key: "buffalo hot", aliases: ["buffalo hot"] },
-    { key: "buffalo mild", aliases: ["buffalo mild"] },
-    { key: "buffalo medium", aliases: ["buffalo medium"] },
-    { key: "chocolate chiltepin", aliases: ["chocolate chiltepin"] },
-    { key: "chorizo", aliases: ["chorizo"] },
-    { key: "cinnamon roll", aliases: ["cinnamon roll"] },
-    { key: "citrus chipotle", aliases: ["citrus chipotle"] },
-    { key: "garlic parmesan", aliases: ["garlic parmesan"] },
-    { key: "green chile", aliases: ["green chile", "green chili"] },
-    { key: "lime pepper", aliases: ["lime pepper"] },
-    { key: "mango habanero", aliases: ["mango habanero"] },
-    { key: "pizza", aliases: ["pizza"] },
-    { key: "sweet and spicy", aliases: ["sweet and spicy", "sweet n spicy"] },
-    { key: "teriyaki", aliases: ["teriyaki"] },
-    { key: "bbq", aliases: ["bbq", "barbecue"] },
-    { key: "hot", aliases: ["hot"] },
-    { key: "mild", aliases: ["mild"] }
-  ];
-
+function findSauces(text) {
+  const normalized = normalizeText(text);
   const found = [];
 
-  for (const sauce of sauceAliases) {
-    if (sauce.aliases.some((alias) => lower.includes(alias))) {
-      found.push(sauce.key);
+  for (const sauce of DEMO_MENU.wingSauces) {
+    if (normalized.includes(sauce)) {
+      found.push(sauce);
     }
   }
 
-  const unique = [...new Set(found)];
-
-  if (unique.includes("buffalo hot") && unique.includes("hot")) {
-    return unique.filter((s) => s !== "hot");
-  }
-  if (unique.includes("buffalo mild") && unique.includes("mild")) {
-    return unique.filter((s) => s !== "mild");
+  if (normalized.includes("buffalo") && !found.includes("buffalo mild") && !found.includes("buffalo hot")) {
+    found.push("buffalo mild");
   }
 
-  return unique;
+  if (normalized.includes("garlic parm") && !found.includes("garlic parmesan")) {
+    found.push("garlic parmesan");
+  }
+
+  if (normalized.includes("sweet spicy") && !found.includes("sweet and spicy")) {
+    found.push("sweet and spicy");
+  }
+
+  if (normalized.includes("plain") || normalized.includes("no sauce")) {
+    found.push("plain");
+  }
+
+  return [...new Set(found)];
 }
 
-function getNumberValue(word) {
-  const normalized = normalizeText(word);
-  const map = {
-    "1": 1,
-    one: 1,
-    un: 1,
-    uno: 1,
-    una: 1,
-    "2": 2,
-    two: 2,
-    dos: 2,
-    "3": 3,
-    three: 3,
-    tres: 3,
-    "4": 4,
-    four: 4,
-    cuatro: 4,
-    "5": 5,
-    five: 5,
-    cinco: 5,
-    "6": 6,
+function findDips(text) {
+  const normalized = normalizeText(text);
+  const found = [];
+
+  if (normalized.includes("ranch")) found.push("ranch");
+  if (normalized.includes("blue cheese") || normalized.includes("bleu cheese")) found.push("blue cheese");
+
+  return [...new Set(found)];
+}
+
+function findWingStyle(text) {
+  const normalized = normalizeText(text);
+  if (normalized.includes("traditional") || normalized.includes("bone in")) return "traditional";
+  if (normalized.includes("boneless")) return "boneless";
+  return null;
+}
+
+function findQuantity(text) {
+  const normalized = normalizeText(text);
+
+  const numericMatch = normalized.match(/\b(6|8|10|12|16|20|24|30|40|50)\b/);
+  if (numericMatch) return Number(numericMatch[1]);
+
+  const wordToNum = {
     six: 6,
-    seis: 6,
-    "7": 7,
-    seven: 7,
-    siete: 7,
-    "8": 8,
     eight: 8,
-    ocho: 8
+    ten: 10,
+    twelve: 12,
+    sixteen: 16,
+    twenty: 20,
+    twentyfour: 24,
+    thirty: 30,
+    forty: 40,
+    fifty: 50
   };
-  return map[normalized] || null;
-}
 
-function parseDipRequest(text, includedCount = 0) {
-  const lower = normalizeText(text);
-
-  const dipNames = [
-    { key: "chipotle ranch", aliases: ["chipotle ranch"] },
-    { key: "jalapeño ranch", aliases: ["jalapeno ranch", "jalapeno", "jalapeño ranch", "jalapeño"] },
-    { key: "blue cheese", aliases: ["blue cheese"] },
-    { key: "ranch", aliases: ["ranch", "ranches"] }
-  ];
-
-  const result = [];
-
-  for (const dip of dipNames) {
-    for (const alias of dip.aliases) {
-      if (lower.includes(alias)) {
-        let count = 1;
-
-        const escapedAlias = alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
-        const beforeMatch = lower.match(new RegExp(`\\b(\\d+|one|two|three|four|five|six|seven|eight|un|uno|una|dos|tres|cuatro|cinco|seis|siete|ocho)\\b\\s+${escapedAlias}`));
-        const afterMatch = lower.match(new RegExp(`${escapedAlias}\\s+\\b(\\d+|one|two|three|four|five|six|seven|eight|un|uno|una|dos|tres|cuatro|cinco|seis|siete|ocho)\\b`));
-
-        if (beforeMatch) {
-          count = getNumberValue(beforeMatch[1]) || 1;
-        } else if (afterMatch) {
-          count = getNumberValue(afterMatch[1]) || 1;
-        } else if (
-          containsAny(lower, [
-            `all ${alias}`,
-            `just ${alias}`,
-            `only ${alias}`,
-            `todo ${alias}`,
-            `todos ${alias}`,
-            `solo ${alias}`
-          ])
-        ) {
-          count = includedCount > 0 ? includedCount : 1;
-        }
-
-        for (let i = 0; i < count; i++) {
-          result.push(dip.key);
-        }
-        break;
-      }
-    }
-  }
-
-  if (result.length === 1 && includedCount > 1) {
-    if (
-      containsAny(lower, [
-        "just ranch",
-        "only ranch",
-        "all ranch",
-        "solo ranch",
-        "puro ranch",
-        "todo ranch",
-        "todos ranch"
-      ]) ||
-      (!lower.includes(" and ") && !lower.includes(" y "))
-    ) {
-      return Array(includedCount).fill(result[0]);
-    }
-  }
-
-  return result.slice(0, includedCount || result.length);
-}
-
-function userSaysNoSauce(text) {
-  const lower = normalizeText(text);
-  return containsAny(lower, [
-    "no sauce",
-    "plain",
-    "dry",
-    "plain wings",
-    "sin salsa",
-    "sin salsas",
-    "naturales"
-  ]);
-}
-
-function userSaysNoDip(text) {
-  const lower = normalizeText(text);
-  return containsAny(lower, [
-    "no dip",
-    "no dips",
-    "no dressing",
-    "no dressings",
-    "no ranch",
-    "none",
-    "ninguno",
-    "ninguna",
-    "sin aderezo",
-    "sin aderezos"
-  ]);
-}
-
-function isYesPhrase(text) {
-  const lower = normalizeText(text);
-  return containsAny(lower, [
-    "yes",
-    "yeah",
-    "yep",
-    "sure",
-    "ok",
-    "okay",
-    "si",
-    "sí",
-    "claro"
-  ]);
-}
-
-function isNoPhrase(text) {
-  const lower = normalizeText(text);
-  return containsAny(lower, [
-    "no",
-    "nope",
-    "no thanks",
-    "no thank you",
-    "no gracias"
-  ]);
-}
-
-function isTransferRequest(text) {
-  const lower = normalizeText(text);
-  return containsAny(lower, [
-    "manager",
-    "person",
-    "human",
-    "representative",
-    "someone",
-    "employee",
-    "cashier",
-    "operator",
-    "speak to someone",
-    "hablar con alguien",
-    "gerente",
-    "persona"
-  ]);
-}
-
-function nextQuestionForWings(session) {
-  const item = session.currentItem;
-  if (!item) return null;
-
-  const sauceLimit = getIncludedSauceLimit(item.details.quantity);
-  const dipLimit = getIncludedDips(item.details.quantity);
-
-  if (!item.details.wingType) {
-    return session.language === "spanish"
-      ? "¿Las quiere tradicionales con hueso o boneless?"
-      : "Would you like traditional bone-in or boneless?";
-  }
-
-  if (!item.details.quantity) {
-    return session.language === "spanish"
-      ? "¿Cuántas piezas le gustaría? Tenemos 6, 9, 12, 18, 24 o 48."
-      : "How many would you like? We have 6, 9, 12, 18, 24, or 48.";
-  }
-
-  if (!item.details.saucesConfirmed) {
-    return session.language === "spanish"
-      ? `Perfecto. Esa orden incluye hasta ${sauceLimit} salsa${sauceLimit > 1 ? "s" : ""}. ¿Qué salsa le gustaría?`
-      : `Perfect. That order includes up to ${sauceLimit} sauce${sauceLimit > 1 ? "s" : ""}. What sauce would you like?`;
-  }
-
-  if (!item.details.dipsConfirmed) {
-    return session.language === "spanish"
-      ? `Perfecto. Esa orden incluye ${dipLimit} aderezo${dipLimit > 1 ? "s" : ""}. ¿Qué aderezo le gustaría? Puede decir, por ejemplo, ${dipLimit === 2 ? "dos ranch, o un ranch y un blue cheese" : "ranch, blue cheese, chipotle ranch o jalapeño ranch"}.`
-      : `Perfect. That order includes ${dipLimit} dipping sauce${dipLimit > 1 ? "s" : ""}. What dipping sauce would you like? You can say, for example, ${dipLimit === 2 ? "two ranch, or one ranch and one blue cheese" : "ranch, blue cheese, chipotle ranch, or jalapeño ranch"}.`;
+  const compact = normalized.replace(/\s+/g, "");
+  for (const [word, num] of Object.entries(wordToNum)) {
+    if (compact.includes(word)) return num;
   }
 
   return null;
 }
 
-function isEndOfOrderPhrase(text) {
-  const lower = normalizeText(text);
-  return containsAny(lower, [
-    "that will be it",
-    "thatll be it",
-    "that is all",
+function detectLanguageChoice(text) {
+  const normalized = normalizeText(text);
+
+  const englishSignals = ["english", "ingles", "in english"];
+  const spanishSignals = ["spanish", "espanol", "español", "in spanish"];
+
+  if (englishSignals.some((s) => normalized.includes(normalizeText(s)))) return "english";
+  if (spanishSignals.some((s) => normalized.includes(normalizeText(s)))) return "spanish";
+
+  return null;
+}
+
+function detectCompletion(text) {
+  const normalized = normalizeText(text);
+  const stopPhrases = [
     "thats all",
     "that's all",
-    "that is it",
-    "that will be all",
-    "thank you",
-    "thank you thats all",
-    "thank you that's all",
-    "no thats all",
-    "no that's all",
-    "no thank you",
     "nothing else",
-    "nothing more",
+    "im good",
+    "i'm good",
+    "no thats it",
+    "no that's it",
+    "done",
+    "thats it",
+    "that's it",
+    "eso es todo",
     "nada mas",
-    "eso seria todo",
+    "nada más",
     "ya seria todo",
-    "seria todo"
-  ]);
+    "ya seria todo"
+  ];
+
+  return stopPhrases.some((p) => normalized.includes(normalizeText(p)));
 }
 
-function maybeAddExtrasToOrder(session, text) {
-  const sauces = parseSauces(text);
-  const dips = parseDipRequest(text, 8);
-  const extras = [...dips, ...sauces];
+function detectNegative(text) {
+  const normalized = normalizeText(text);
+  return ["no", "nope", "nah", "none", "ninguno", "ninguna"].some((p) =>
+    normalized === normalizeText(p) || normalized.includes(` ${normalizeText(p)} `)
+  );
+}
 
-  if (extras.length) {
-    session.order.extraRequests.push(...extras);
-    session.order.subtotalEstimate += extras.length * 0.75;
-    return true;
+function detectYes(text) {
+  const normalized = normalizeText(text);
+  return ["yes", "yeah", "yep", "sure", "ok", "okay", "si", "sí", "claro"].some((p) =>
+    normalized === normalizeText(p) || normalized.includes(normalizeText(p))
+  );
+}
+
+function findDipQuantity(text) {
+  const normalized = normalizeText(text);
+  const match = normalized.match(/\b(1|2|3|4)\b/);
+  if (match) return Number(match[1]);
+
+  if (normalized.includes("one")) return 1;
+  if (normalized.includes("two")) return 2;
+  if (normalized.includes("three")) return 3;
+  if (normalized.includes("four")) return 4;
+
+  if (normalized.includes("uno")) return 1;
+  if (normalized.includes("dos")) return 2;
+  if (normalized.includes("tres")) return 3;
+  if (normalized.includes("cuatro")) return 4;
+
+  return null;
+}
+
+function extractLikelyName(text) {
+  const cleaned = String(text || "").trim();
+
+  if (!cleaned) return null;
+  if (cleaned.length > 40) return null;
+
+  const normalized = normalizeText(cleaned);
+  const badSignals = [
+    "thats all",
+    "that's all",
+    "buffalo",
+    "ranch",
+    "traditional",
+    "boneless",
+    "wings",
+    "fries",
+    "drink"
+  ];
+
+  if (badSignals.some((s) => normalized.includes(normalizeText(s)))) return null;
+
+  const patterns = [
+    /my name is ([a-zA-Z\s'-]+)/i,
+    /name is ([a-zA-Z\s'-]+)/i,
+    /its ([a-zA-Z\s'-]+)/i,
+    /it's ([a-zA-Z\s'-]+)/i,
+    /this is ([a-zA-Z\s'-]+)/i,
+    /^([a-zA-Z][a-zA-Z\s'-]{1,30})$/i
+  ];
+
+  for (const pattern of patterns) {
+    const match = cleaned.match(pattern);
+    if (match && match[1]) {
+      return titleCase(match[1].trim());
+    }
   }
 
-  return false;
+  return null;
 }
 
-// ----------------------------------
-// AI Prompt
-// ----------------------------------
-const SYSTEM_PROMPT = `
-You are Jeffrey, the phone cashier for Flaps and Racks restaurant in Tucson, Arizona.
+function localIntentScan(text, session) {
+  const sauces = findSauces(text);
+  const dips = findDips(text);
+  const quantity = findQuantity(text);
+  const style = findWingStyle(text);
+  const languageChoice = detectLanguageChoice(text);
+  const done = detectCompletion(text);
+  const negative = detectNegative(text);
+  const positive = detectYes(text);
+  const dipQty = findDipQuantity(text);
+  const likelyName = extractLikelyName(text);
 
-You are warm, polite, calm, friendly, and service-oriented.
-You sound like a real restaurant cashier, not a robot.
+  return {
+    quantity,
+    style,
+    sauces,
+    dips,
+    dipQty,
+    languageChoice,
+    done,
+    negative,
+    positive,
+    likelyName,
+    stage: session.stage
+  };
+}
 
-Rules:
-- Speak in short, clear sentences.
-- Ask one question at a time.
-- Do not repeat the greeting after the call has started.
-- Do not act like every turn is a new call.
-- Move the order forward naturally.
-- Confirm instead of assuming.
-- Keep the conversation easy to follow.
-- Never use robotic phrases.
+function mergeLocalSignals(session, scan) {
+  if (scan.languageChoice && !session.language) {
+    session.language = scan.languageChoice;
+  }
 
-Restaurant guidance:
-- Default to To-Go.
-- Never offer delivery.
-- If customer says wings, confirm traditional bone-in or boneless.
-- Wing sizes: 6, 9, 12, 18, 24, 48
-- Sauce limit: 1 sauce per 6 pieces
-- Dipping sauces: 1 per 6 pieces
-- Extra sauces: 75 cents and on the side
-- Ribs: half rack = 1 sauce, full rack = up to 2 sauces
-- Popular sauces: Lime Pepper, Garlic Parmesan, Mango Habanero, Green Chile, BBQ Chiltepin
-- Top upsells: corn ribs, mozzarella sticks, mac bites
-- If order is near or above 50 dollars, payment is required before placing the order
-- Only offer upsell once near the end
-- Only recap at the end
-- If customer asks for help or gets frustrated, offer transfer
+  if (scan.quantity && !session.currentItem.quantity) {
+    session.currentItem.quantity = scan.quantity;
+  }
 
-Always behave like a cashier following the order process.
+  if (scan.style && !session.currentItem.style) {
+    session.currentItem.style = scan.style;
+  }
+
+  if (scan.sauces.length) {
+    for (const sauce of scan.sauces) {
+      if (!session.currentItem.sauces.includes(sauce)) {
+        if (session.currentItem.sauces.length < 2) {
+          session.currentItem.sauces.push(sauce);
+        }
+      }
+    }
+  }
+
+  // Context clue:
+  // If wing sauce is already chosen and user says "ranch", treat as dip by default
+  if (scan.dips.length && session.currentItem.sauces.length > 0 && session.stage === "dips") {
+    for (const dipType of scan.dips) {
+      const qty = scan.dipQty || 1;
+      session.order.dips.push({ type: dipType, quantity: qty });
+    }
+  }
+
+  if (scan.likelyName && !session.order.customerName && session.stage === "name") {
+    session.order.customerName = scan.likelyName;
+  }
+}
+
+function determineStage(session) {
+  if (!session.language) return "language_choice";
+
+  if (!session.currentItem.quantity || !session.currentItem.style) return "wings";
+
+  if (!session.currentItem.sauces.length) return "wing_sauce";
+
+  if (!session.recapDone && !session.upsellAttempted) return "upsell";
+
+  if (!session.recapDone) return "dips";
+
+  if (!session.order.customerName) return "name";
+
+  return "close";
+}
+
+function buildRuleFallback(session) {
+  const lang = session.language || "english";
+
+  const antiLoop = session.repeatCount >= 2;
+
+  const messages = {
+    english: {
+      language_choice: antiLoop
+        ? "No problem. We can continue in English. What can I get started for you today?"
+        : "Thank you for calling Flaps and Racks, this is Jeffrey. Would you like to continue in English or Spanish?",
+      wings: antiLoop
+        ? "You can tell me something like 12 traditional wings or 12 boneless wings."
+        : "What wings can I get started for you today?",
+      wing_sauce: antiLoop
+        ? "No problem. You can choose a sauce like buffalo mild, lime pepper, garlic parmesan, or BBQ."
+        : "What sauce would you like on those?",
+      upsell: antiLoop
+        ? "You’re all set on the wings. Would you like fries or a drink with that?"
+        : "Would you like to add fries or a drink today?",
+      dips: antiLoop
+        ? "No problem. I can leave dips off, or add ranch or blue cheese."
+        : "Any dipping sauce like ranch or blue cheese?",
+      name: antiLoop
+        ? "I just need a name for the order."
+        : "Perfect. What name should I put on the order?",
+      close: "Perfect. I have that ready. Thank you for calling Flaps and Racks."
+    },
+    spanish: {
+      language_choice: antiLoop
+        ? "No hay problema. Seguimos en español. ¿Qué le puedo preparar hoy?"
+        : "Gracias por llamar a Flaps and Racks, le atiende Jeffrey. ¿Prefiere continuar en inglés o en español?",
+      wings: antiLoop
+        ? "Me puede decir algo como 12 alitas tradicionales o 12 boneless."
+        : "¿Qué pedido le puedo tomar hoy?",
+      wing_sauce: antiLoop
+        ? "No hay problema. Puede escoger una salsa como buffalo mild, lime pepper, garlic parmesan o BBQ."
+        : "¿Qué salsa le gustaría para esas alitas?",
+      upsell: antiLoop
+        ? "Sus alitas ya están listas. ¿Le gustaría agregar papas o una bebida?"
+        : "¿Le gustaría agregar papas o una bebida?",
+      dips: antiLoop
+        ? "No hay problema. Puedo dejarlas sin dip o agregar ranch o blue cheese."
+        : "¿Quiere algún dip como ranch o blue cheese?",
+      name: antiLoop
+        ? "Solo necesito el nombre para la orden."
+        : "Perfecto. ¿A nombre de quién pongo la orden?",
+      close: "Perfecto. Ya quedó listo. Gracias por llamar a Flaps and Racks."
+    }
+  };
+
+  const stage = determineStage(session);
+  ask(session, stage);
+  return messages[lang][stage];
+}
+
+async function generateAiTurn(session, customerText) {
+  const lang = session.language || "english";
+  const orderSummary = summarizeOrder(session.order, lang);
+  const currentItemSummary = JSON.stringify(session.currentItem);
+
+  const systemPrompt = `
+You are Jeffrey, a warm, natural, phone-order cashier for Flaps & Racks.
+
+Mission:
+Sound convincing, fluid, and reliable enough for an owner demo.
+Do NOT sound robotic, legalistic, or overly scripted.
+Keep responses short and natural.
+One or two sentences is ideal.
+
+You are in DEMO MODE, not full production mode.
+Your job is to gracefully guide a simple order path:
+1) language choice
+2) wings
+3) sauce
+4) dips
+5) one light upsell
+6) recap
+7) customer name
+8) close
+
+Behavior rules:
+- Be friendly and concise.
+- Do not over-explain.
+- If the customer gives a short answer, treat it as normal.
+- If context makes the answer obvious, move forward.
+- Avoid repeating the exact same question wording.
+- If confusion appears, recover gently instead of restarting.
+- Never mention "demo mode", "AI", "system", "policy", or "state".
+- Never sound like a bot menu.
+- Use the current stage as guidance, but prioritize conversation flow.
+
+Output format:
+Return ONLY valid JSON with these keys:
+{
+  "assistantMessage": string,
+  "stageDecision": string,
+  "shouldFinalizeCurrentItem": boolean,
+  "markRecapDone": boolean,
+  "markUpsellAttempted": boolean,
+  "captureDip": {
+    "type": string | null,
+    "quantity": number | null
+  },
+  "captureCustomerName": string | null
+}
+
+Allowed stageDecision values:
+"language_choice", "wings", "wing_sauce", "upsell", "dips", "recap", "name", "close"
+
+Current language: ${lang}
+Current stage: ${session.stage}
+Repeat count for last question: ${session.repeatCount}
+Order summary so far: ${orderSummary}
+Current item: ${currentItemSummary}
+
+Demo menu hints:
+- Wing styles: traditional, boneless
+- Common wing sauces: buffalo mild, buffalo hot, lime pepper, garlic parmesan, bbq, mango habanero, teriyaki
+- Dips: ranch, blue cheese
+- Upsell options: fries or a drink
+
+Important recap behavior:
+- Once the item has quantity, style, and at least one sauce, you may guide to dips or upsell.
+- Recap should sound natural, like "Let me read that back real quick..."
+- Ask for customer name after recap.
+- Closing should be brief and warm.
+
+If the user already gave a valid name and stage is name, capture it.
 `;
 
-// ----------------------------------
-// Health Routes
-// ----------------------------------
-app.get("/", (_req, res) => {
-  res.send("Jeffrey AI cashier is running.");
-});
+  const userPrompt = `
+Customer said: "${customerText}"
 
-app.get("/voice", (_req, res) => {
-  res.type("text/plain").send("Voice endpoint is live.");
-});
-
-// ----------------------------------
-// Main Voice Route
-// ----------------------------------
-app.post("/voice", async (req, res) => {
-  const VoiceResponse = twilio.twiml.VoiceResponse;
-  const twiml = new VoiceResponse();
-
-  const callSid = req.body.CallSid || "unknown-call";
-  const userSpeech = (req.body.SpeechResult || "").trim();
-  const lower = normalizeText(userSpeech);
-  const session = getSession(callSid);
-
-  console.log("Incoming voice webhook:", {
-    callSid: req.body.CallSid,
-    speech: req.body.SpeechResult,
-    from: req.body.From,
-    to: req.body.To
-  });
+Current local state:
+${JSON.stringify(
+  {
+    language: session.language,
+    stage: session.stage,
+    order: session.order,
+    currentItem: session.currentItem,
+    repeatCount: session.repeatCount,
+    recapDone: session.recapDone,
+    upsellAttempted: session.upsellAttempted
+  },
+  null,
+  2
+)}
+`;
 
   try {
-    let reply = "";
-
-    if (!session.greeted && !userSpeech) {
-      session.greeted = true;
-      session.stage = "language";
-      reply =
-        "Thank you for calling Flaps and Racks. This is Jeffrey. Would you like to order in English or en Español?";
-    }
-
-    if (!reply && isTransferRequest(userSpeech)) {
-      reply =
-        session.language === "spanish"
-          ? "Claro. Un momento por favor mientras le ayudo con eso."
-          : "Of course. One moment please while I help with that.";
-    }
-
-    if (!reply && session.stage === "language") {
-      if (userSpeech) {
-        session.language = detectLanguage(userSpeech);
-
-        if (containsAny(lower, ["english", "ingles", "inglés"])) {
-          session.language = "english";
-        }
-        if (containsAny(lower, ["espanol", "español", "spanish"])) {
-          session.language = "spanish";
-        }
-
-        session.stage = "order_type";
-        reply =
-          session.language === "spanish"
-            ? "Perfecto. ¿Este pedido será para llevar?"
-            : "Perfect. Will this order be To-Go?";
-      }
-    }
-
-    if (!reply && session.stage === "order_type") {
-      if (
-        containsAny(lower, [
-          "yes",
-          "si",
-          "sí",
-          "to go",
-          "pickup",
-          "pick up",
-          "para llevar",
-          "i want to place an order",
-          "i want to order",
-          "quiero hacer una orden",
-          "quiero ordenar"
-        ])
-      ) {
-        session.orderTypeConfirmed = true;
-        session.stage = "item_capture";
-        reply =
-          session.language === "spanish"
-            ? "Perfecto. ¿Qué le preparo hoy?"
-            : "Great. What can I get started for you today?";
-      } else if (userSpeech) {
-        session.orderTypeConfirmed = true;
-        session.stage = "item_capture";
-      }
-    }
-
-    if (!reply && session.stage === "item_capture") {
-      const parsedWing = parseWingInput(userSpeech);
-
-      if (parsedWing.mentionsWings) {
-        session.currentItem = {
-          type: "wings",
-          name: parsedWing.wingType === "boneless" ? "Boneless Wings" : "Traditional Wings",
-          details: {
-            wingType: parsedWing.wingType,
-            quantity: parsedWing.qty,
-            sauces: [],
-            dips: [],
-            saucesConfirmed: false,
-            dipsConfirmed: false,
-            notes: []
-          },
-          estimatedPrice:
-            parsedWing.wingType && parsedWing.qty
-              ? estimateWingPrice(parsedWing.wingType, parsedWing.qty)
-              : 0
-        };
-
-        session.stage = "wings_detail";
-        reply = nextQuestionForWings(session);
-      } else if (containsAny(lower, ["corn ribs"])) {
-        session.currentItem = {
-          type: "side",
-          name: "Corn Ribs",
-          details: { sauces: [] },
-          estimatedPrice: 6.45
-        };
-        session.stage = "corn_ribs_sauce";
-        reply =
-          session.language === "spanish"
-            ? "Las corn ribs incluyen una salsa. ¿Qué salsa le gustaría?"
-            : "Corn ribs include one sauce. What sauce would you like?";
-      } else if (containsAny(lower, ["mozzarella"])) {
-        addItemToOrder(session, {
-          type: "side",
-          name: "Mozzarella Sticks",
-          details: { sauces: ["marinara"] },
-          estimatedPrice: 7.50
-        });
-        session.stage = "next_item";
-        reply =
-          session.language === "spanish"
-            ? "Perfecto. ¿Qué más le puedo preparar?"
-            : "Perfect. What else can I get for you?";
-      } else if (containsAny(lower, ["mac bites"])) {
-        addItemToOrder(session, {
-          type: "side",
-          name: "Mac Bites",
-          details: {},
-          estimatedPrice: 7.50
-        });
-        session.stage = "next_item";
-        reply =
-          session.language === "spanish"
-            ? "Perfecto. ¿Qué más le puedo preparar?"
-            : "Perfect. What else can I get for you?";
-      } else {
-        const completion = await openai.chat.completions.create({
-          model: "gpt-4o-mini",
-          temperature: 0.3,
-          messages: [
-            { role: "system", content: SYSTEM_PROMPT },
-            {
-              role: "system",
-              content: `Language: ${session.language || "english"}. Stage: ${session.stage}. Current order: ${formatOrderSummary(session.order)}`
-            },
-            { role: "user", content: userSpeech || "Ask what the customer wants to order." }
-          ]
-        });
-
-        reply =
-          completion.choices?.[0]?.message?.content?.trim() ||
-          "What can I get started for you today?";
-      }
-    }
-
-    if (!reply && session.stage === "wings_detail" && session.currentItem?.type === "wings") {
-      const item = session.currentItem;
-      const parsedWing = parseWingInput(userSpeech);
-
-      if (!item.details.wingType && parsedWing.wingType) {
-        item.details.wingType = parsedWing.wingType;
-        item.name = parsedWing.wingType === "boneless" ? "Boneless Wings" : "Traditional Wings";
-      }
-
-      if (!item.details.quantity && parsedWing.qty) {
-        item.details.quantity = parsedWing.qty;
-        item.estimatedPrice = estimateWingPrice(item.details.wingType || "traditional", parsedWing.qty);
-      }
-
-      if (item.details.quantity) {
-        const sauceLimit = getIncludedSauceLimit(item.details.quantity);
-        const dipLimit = getIncludedDips(item.details.quantity);
-
-        const sauces = parseSauces(userSpeech);
-        const dips = parseDipRequest(userSpeech, dipLimit);
-
-        if (!item.details.saucesConfirmed) {
-          if (sauces.length) {
-            item.details.sauces = sauces.slice(0, sauceLimit);
-            item.details.saucesConfirmed = true;
-          } else if (userSaysNoSauce(userSpeech)) {
-            item.details.sauces = [];
-            item.details.saucesConfirmed = true;
-          }
-        }
-
-        if (!item.details.dipsConfirmed) {
-          if (dips.length) {
-            item.details.dips = dips.slice(0, dipLimit);
-            item.details.dipsConfirmed = true;
-          } else if (userSaysNoDip(userSpeech)) {
-            item.details.dips = [];
-            item.details.dipsConfirmed = true;
-          }
-        }
-
-        if (
-          !item.details.saucesConfirmed &&
-          item.details.wingType &&
-          item.details.quantity &&
-          userSpeech &&
-          !sauces.length &&
-          dips.length
-        ) {
-          reply = session.language === "spanish"
-            ? "Perfecto. Ya anoté los aderezos. Ahora, ¿qué salsa le gustaría para las alitas?"
-            : "Perfect. I got the dips. Now, what sauce would you like for the wings?";
-        }
-
-        if (
-          !reply &&
-          !item.details.dipsConfirmed &&
-          item.details.saucesConfirmed &&
-          userSpeech &&
-          sauces.length &&
-          !dips.length &&
-          containsAny(lower, ["thats it", "that's it", "that is all", "nada mas", "seria todo"])
-        ) {
-          item.details.dips = [];
-          item.details.dipsConfirmed = true;
-        }
-      }
-
-      if (!reply) {
-        const nextQ = nextQuestionForWings(session);
-
-        if (nextQ) {
-          reply = nextQ;
-        } else {
-          addItemToOrder(session, item);
-          session.stage = "next_item";
-          reply =
-            session.language === "spanish"
-              ? "Perfecto. ¿Qué más le puedo preparar?"
-              : "Perfect. What else can I get for you?";
-        }
-      }
-    }
-
-    if (!reply && session.stage === "corn_ribs_sauce" && session.currentItem?.name === "Corn Ribs") {
-      const sauces = parseSauces(userSpeech);
-
-      if (sauces.length) {
-        session.currentItem.details.sauces = [sauces[0]];
-      } else if (userSaysNoSauce(userSpeech)) {
-        session.currentItem.details.sauces = [];
-      } else if (userSpeech) {
-        session.currentItem.details.sauces = [userSpeech];
-      }
-
-      addItemToOrder(session, session.currentItem);
-      session.stage = "next_item";
-      reply =
-        session.language === "spanish"
-          ? "Perfecto. ¿Qué más le puedo preparar?"
-          : "Perfect. What else can I get for you?";
-    }
-
-    if (!reply && session.stage === "next_item") {
-      if (isEndOfOrderPhrase(userSpeech)) {
-        if (!session.order.upsellOffered) {
-          session.order.upsellOffered = true;
-          session.stage = "upsell";
-          reply =
-            session.language === "spanish"
-              ? "Antes de terminar, ¿le gustaría agregar corn ribs, mozzarella sticks o mac bites?"
-              : "Before I finish, would you like to add corn ribs, mozzarella sticks, or mac bites?";
-        } else {
-          session.stage = "extras";
-          reply =
-            session.language === "spanish"
-              ? "¿Le gustaría alguna salsa o aderezo extra al lado? Cuestan 75 centavos cada uno."
-              : "Would you like any extra sauces or extra dressings on the side? They are 75 cents each.";
-        }
-      } else if (userSpeech) {
-        session.stage = "item_capture";
-      }
-    }
-
-    if (!reply && session.stage === "upsell") {
-      if (isNoPhrase(userSpeech)) {
-        session.stage = "extras";
-        reply =
-          session.language === "spanish"
-            ? "¿Le gustaría alguna salsa o aderezo extra al lado? Cuestan 75 centavos cada uno."
-            : "Would you like any extra sauces or extra dressings on the side? They are 75 cents each.";
-      } else if (userSpeech) {
-        session.stage = "item_capture";
-      }
-    }
-
-    if (!reply && session.stage === "extras") {
-      session.order.extraSauceAsked = true;
-
-      if (isNoPhrase(userSpeech)) {
-        if (session.order.subtotalEstimate >= 45 && !session.order.paymentWarningGiven) {
-          session.order.paymentWarningGiven = true;
-          session.stage = "payment";
-          reply =
-            session.language === "spanish"
-              ? "Antes de continuar, nuestra política requiere pago para órdenes de más de 50 dólares antes de enviarla. Puede pagar por teléfono o por un enlace seguro por mensaje. ¿Desea continuar?"
-              : "Before we continue, our policy requires payment for orders over 50 dollars before we place the order. You can pay over the phone or through a secure text link. Would you like to continue?";
-        } else {
-          session.stage = "recap";
-        }
-      } else if (maybeAddExtrasToOrder(session, userSpeech)) {
-        if (session.order.subtotalEstimate >= 45 && !session.order.paymentWarningGiven) {
-          session.order.paymentWarningGiven = true;
-          session.stage = "payment";
-          reply =
-            session.language === "spanish"
-              ? "Perfecto. Ya agregué las salsas extra. Antes de continuar, nuestra política requiere pago para órdenes de más de 50 dólares antes de enviarla. Puede pagar por teléfono o por un enlace seguro por mensaje. ¿Desea continuar?"
-              : "Perfect. I added the extra sauces. Before we continue, our policy requires payment for orders over 50 dollars before we place the order. You can pay over the phone or through a secure text link. Would you like to continue?";
-        } else {
-          session.stage = "recap";
-        }
-      } else if (isYesPhrase(userSpeech)) {
-        session.stage = "extras_detail";
-        reply =
-          session.language === "spanish"
-            ? "Claro. ¿Qué salsa o aderezo extra le gustaría?"
-            : "Of course. What extra sauce or dressing would you like?";
-      } else if (userSpeech) {
-        session.stage = "extras_detail";
-        reply =
-          session.language === "spanish"
-            ? "Claro. Dígame qué salsa o aderezo extra le gustaría."
-            : "Sure. Tell me which extra sauce or dressing you would like.";
-      }
-    }
-
-    if (!reply && session.stage === "extras_detail") {
-      if (maybeAddExtrasToOrder(session, userSpeech)) {
-        if (session.order.subtotalEstimate >= 45 && !session.order.paymentWarningGiven) {
-          session.order.paymentWarningGiven = true;
-          session.stage = "payment";
-          reply =
-            session.language === "spanish"
-              ? "Perfecto. Ya agregué las salsas extra. Antes de continuar, nuestra política requiere pago para órdenes de más de 50 dólares antes de enviarla. Puede pagar por teléfono o por un enlace seguro por mensaje. ¿Desea continuar?"
-              : "Perfect. I added the extra sauces. Before we continue, our policy requires payment for orders over 50 dollars before we place the order. You can pay over the phone or through a secure text link. Would you like to continue?";
-        } else {
-          session.stage = "recap";
-        }
-      } else if (isNoPhrase(userSpeech)) {
-        session.stage = "recap";
-      } else {
-        reply =
-          session.language === "spanish"
-            ? "Perdón, no entendí la salsa extra. Puede decir, por ejemplo, ranch, blue cheese, buffalo mild o lime pepper."
-            : "Sorry, I did not catch the extra sauce. You can say, for example, ranch, blue cheese, buffalo mild, or lime pepper.";
-      }
-    }
-
-    if (!reply && session.stage === "payment") {
-      if (containsAny(lower, ["no"])) {
-        session.stage = "closing";
-        reply =
-          session.language === "spanish"
-            ? "No hay problema. También puede hacer la orden en flapsandracks.com."
-            : "No problem. You can also place the order online at flapsandracks.com.";
-      } else {
-        session.stage = "recap";
-      }
-    }
-
-    if (!reply && session.stage === "recap") {
-      reply =
-        session.language === "spanish"
-          ? `Permítame confirmar su orden. ${formatOrderSummary(session.order)}. ¿Está todo correcto?`
-          : `Let me confirm your order. ${formatOrderSummary(session.order)}. Is everything correct?`;
-      session.stage = "confirm_recap";
-    }
-
-    if (!reply && session.stage === "confirm_recap") {
-      if (containsAny(lower, ["yes", "si", "sí", "correct", "correcto"])) {
-        session.stage = "order_name";
-        reply =
-          session.language === "spanish"
-            ? "¿A nombre de quién va la orden?"
-            : "What name should I put on the order?";
-      } else {
-        session.stage = "item_capture";
-        reply =
-          session.language === "spanish"
-            ? "Claro. Dígame qué quiere corregir."
-            : "Of course. Tell me what you would like to correct.";
-      }
-    }
-
-    if (!reply && session.stage === "order_name") {
-      session.order.orderName = userSpeech;
-      session.stage = "closing";
-      reply =
-        session.language === "spanish"
-          ? "Perfecto. Su orden estará lista en aproximadamente 25 minutos. Gracias por llamar a Flaps and Racks."
-          : "Perfect. Your order should be ready in about 25 minutes. Thank you for calling Flaps and Racks.";
-    }
-
-    if (!reply && session.stage === "closing") {
-      reply =
-        session.language === "spanish"
-          ? "Gracias por llamar a Flaps and Racks."
-          : "Thank you for calling Flaps and Racks.";
-    }
-
-    if (!reply) {
-      const completion = await openai.chat.completions.create({
-        model: "gpt-4o-mini",
-        temperature: 0.3,
-        messages: [
-          { role: "system", content: SYSTEM_PROMPT },
-          {
-            role: "system",
-            content: `Current stage: ${session.stage}. Language: ${session.language || "english"}. Current order: ${formatOrderSummary(session.order)}`
-          },
-          { role: "user", content: userSpeech || "Continue the order naturally without greeting again." }
-        ]
-      });
-
-      reply =
-        completion.choices?.[0]?.message?.content?.trim() ||
-        "What can I get started for you today?";
-    }
-
-    const gather = twiml.gather({
-      input: ["speech"],
-      action: "/voice",
-      method: "POST",
-      speechTimeout: "3",
-      timeout: 5,
-      enhanced: true
+    const completion = await openai.chat.completions.create({
+      model: MODEL,
+      temperature: 0.5,
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt }
+      ]
     });
 
-    gather.say(
-      {
-        voice: "Polly.Joanna-Generative",
-        language: session.language === "spanish" ? "es-MX" : "en-US"
-      },
-      reply
-    );
+    const raw = completion.choices?.[0]?.message?.content || "{}";
+    const parsed = safeJsonParse(raw, {});
 
-    twiml.redirect("/voice");
-
-    res.type("text/xml");
-    res.status(200).send(twiml.toString());
+    return {
+      assistantMessage: parsed.assistantMessage || null,
+      stageDecision: parsed.stageDecision || null,
+      shouldFinalizeCurrentItem: Boolean(parsed.shouldFinalizeCurrentItem),
+      markRecapDone: Boolean(parsed.markRecapDone),
+      markUpsellAttempted: Boolean(parsed.markUpsellAttempted),
+      captureDip: parsed.captureDip || { type: null, quantity: null },
+      captureCustomerName: parsed.captureCustomerName || null
+    };
   } catch (error) {
-    console.error("VOICE ERROR:", error);
+    console.error("OpenAI error:", error?.message || error);
+    return null;
+  }
+}
 
-    const gather = twiml.gather({
-      input: ["speech"],
-      action: "/voice",
-      method: "POST",
-      speechTimeout: "3",
-      timeout: 5,
-      enhanced: true
+function applyAiDecisions(session, ai) {
+  if (!ai) return;
+
+  if (
+    ai.captureDip &&
+    ai.captureDip.type &&
+    DEMO_MENU.dipSauces.includes(ai.captureDip.type)
+  ) {
+    session.order.dips.push({
+      type: ai.captureDip.type,
+      quantity: Number(ai.captureDip.quantity) > 0 ? Number(ai.captureDip.quantity) : 1
     });
+  }
 
-    gather.say(
-      { voice: "Polly.Joanna-Generative", language: "en-US" },
-      "Thank you for calling Flaps and Racks. This is Jeffrey. How can I help you today?"
-    );
+  if (ai.captureCustomerName && !session.order.customerName) {
+    session.order.customerName = titleCase(ai.captureCustomerName.trim());
+  }
 
-    twiml.redirect("/voice");
+  if (ai.shouldFinalizeCurrentItem) {
+    const ready =
+      session.currentItem.quantity &&
+      session.currentItem.style &&
+      session.currentItem.sauces.length > 0;
 
-    res.type("text/xml");
-    res.status(200).send(twiml.toString());
+    if (ready) {
+      addWingItemToOrder(session);
+    }
+  }
+
+  if (ai.markUpsellAttempted) {
+    session.upsellAttempted = true;
+  }
+
+  if (ai.markRecapDone) {
+    session.recapDone = true;
+  }
+
+  if (ai.stageDecision) {
+    session.stage = ai.stageDecision;
+  }
+}
+
+function enforceFlow(session, customerText, aiMessage) {
+  const lang = session.language || "english";
+  const normalized = normalizeText(customerText);
+
+  // Auto-finalize wing item once it is complete and we're moving beyond wing_sauce
+  const readyItem =
+    session.currentItem.quantity &&
+    session.currentItem.style &&
+    session.currentItem.sauces.length > 0;
+
+  if (
+    readyItem &&
+    session.order.items.length === 0 &&
+    (session.stage === "upsell" || session.stage === "dips" || session.stage === "recap" || session.stage === "name" || session.stage === "close")
+  ) {
+    addWingItemToOrder(session);
+  }
+
+  // If upsell was attempted and user says no / that's all, move to recap
+  if (
+    session.stage === "upsell" &&
+    (detectNegative(normalized) || detectCompletion(normalized))
+  ) {
+    session.upsellAttempted = true;
+    session.stage = "recap";
+  }
+
+  // If dips stage and user says no, move to recap
+  if (session.stage === "dips" && detectNegative(normalized)) {
+    session.stage = "recap";
+  }
+
+  // If recap stage not yet marked, keep it
+  if (session.stage === "recap" && !session.recapDone) {
+    return lang === "spanish"
+      ? `Permítame leerle la orden para confirmar. Llevo ${summarizeOrder(session.order, "spanish")}.`
+      : `Let me read that back real quick. I have ${summarizeOrder(session.order, "english")}.`;
+  }
+
+  // If recap is done and no name, ask for name
+  if (session.recapDone && !session.order.customerName) {
+    session.stage = "name";
+  }
+
+  // If name captured, move to close
+  if (session.order.customerName && session.recapDone) {
+    session.stage = "close";
+  }
+
+  return aiMessage;
+}
+
+function greetingForStart(language = null) {
+  if (language === "spanish") {
+    return "Gracias por llamar a Flaps and Racks, le atiende Jeffrey. ¿Prefiere continuar en inglés o en español?";
+  }
+  return "Thank you for calling Flaps and Racks, this is Jeffrey. Would you like to continue in English or Spanish?";
+}
+
+/**
+ * -----------------------------
+ * Routes
+ * -----------------------------
+ */
+
+app.get("/", (_req, res) => {
+  res.json({
+    ok: true,
+    service: "Demo Mode Jeffrey 1.2",
+    time: nowIso()
+  });
+});
+
+app.get("/health", (_req, res) => {
+  res.json({
+    ok: true,
+    service: "Demo Mode Jeffrey 1.2",
+    sessions: sessions.size,
+    time: nowIso()
+  });
+});
+
+/**
+ * Start a new call/session
+ * Body:
+ * {
+ *   "callId": "abc123"
+ * }
+ */
+app.post("/session/start", (req, res) => {
+  try {
+    const { callId } = req.body || {};
+    const session = getOrCreateSession(callId);
+
+    session.language = null;
+    session.stage = "language_choice";
+    session.turns = 0;
+    session.callClosed = false;
+    saveSession(session);
+
+    res.json({
+      ok: true,
+      callId: session.callId,
+      message: greetingForStart()
+    });
+  } catch (error) {
+    console.error("/session/start error:", error);
+    res.status(400).json({
+      ok: false,
+      error: error.message || "Unable to start session"
+    });
   }
 });
 
-const PORT = process.env.PORT || 8080;
+/**
+ * Main conversation turn
+ * Body:
+ * {
+ *   "callId": "abc123",
+ *   "transcript": "12 traditional wings buffalo mild"
+ * }
+ */
+app.post("/session/turn", async (req, res) => {
+  try {
+    const { callId, transcript } = req.body || {};
+    if (!callId) {
+      return res.status(400).json({ ok: false, error: "callId is required" });
+    }
+
+    const text = String(transcript || "").trim();
+    const session = getOrCreateSession(callId);
+    session.turns += 1;
+
+    if (!text) {
+      const fallback = buildRuleFallback(session);
+      saveSession(session);
+      return res.json({
+        ok: true,
+        callId,
+        reply: fallback,
+        state: {
+          language: session.language,
+          stage: session.stage,
+          order: session.order,
+          currentItem: session.currentItem
+        }
+      });
+    }
+
+    // 1) Local scan first
+    const scan = localIntentScan(text, session);
+    mergeLocalSignals(session, scan);
+
+    // 2) Fast-path language selection
+    if (!session.language && scan.languageChoice) {
+      session.language = scan.languageChoice;
+      session.stage = "wings";
+
+      const reply =
+        session.language === "spanish"
+          ? "Perfecto. ¿Qué le puedo preparar hoy?"
+          : "Perfect. What can I get started for you today?";
+
+      saveSession(session);
+      return res.json({
+        ok: true,
+        callId,
+        reply,
+        state: {
+          language: session.language,
+          stage: session.stage,
+          order: session.order,
+          currentItem: session.currentItem
+        }
+      });
+    }
+
+    // 3) Determine stage from current memory before AI
+    session.stage = determineStage(session);
+
+    // 4) Ask recap before AI when flow reaches that point
+    const readyForRecap =
+      session.language &&
+      session.order.items.length > 0 &&
+      !session.recapDone &&
+      (session.stage === "name" || session.stage === "close" || detectCompletion(text));
+
+    if (readyForRecap) {
+      session.stage = "recap";
+      const recapReply =
+        session.language === "spanish"
+          ? `Permítame leerle la orden para confirmar. Llevo ${summarizeOrder(session.order, "spanish")}. ¿Se escucha bien así?`
+          : `Let me read that back real quick. I have ${summarizeOrder(session.order, "english")}. Does that sound right?`;
+
+      session.recapDone = true;
+      saveSession(session);
+
+      return res.json({
+        ok: true,
+        callId,
+        reply: recapReply,
+        state: {
+          language: session.language,
+          stage: session.stage,
+          order: session.order,
+          currentItem: session.currentItem
+        }
+      });
+    }
+
+    // 5) Generate AI turn
+    const ai = await generateAiTurn(session, text);
+    applyAiDecisions(session, ai);
+
+    // 6) Enforce flow safety
+    let reply = enforceFlow(session, text, ai?.assistantMessage);
+
+    // 7) Fallback if AI didn’t give a usable response
+    if (!reply || typeof reply !== "string" || !reply.trim()) {
+      reply = buildRuleFallback(session);
+    }
+
+    // 8) If recap is already done and user confirms, ask for name
+    if (session.recapDone && !session.order.customerName && detectYes(text)) {
+      session.stage = "name";
+      reply =
+        session.language === "spanish"
+          ? "Perfecto. ¿A nombre de quién pongo la orden?"
+          : "Perfect. What name should I put on the order?";
+    }
+
+    // 9) If name exists, close warmly
+    if (session.order.customerName && session.recapDone) {
+      session.stage = "close";
+      session.callClosed = true;
+      reply =
+        session.language === "spanish"
+          ? `Perfecto, ${session.order.customerName}. Su orden quedó lista para llevar. Gracias por llamar a Flaps and Racks.`
+          : `Perfect, ${session.order.customerName}. Your to-go order is all set. Thank you for calling Flaps and Racks.`;
+    }
+
+    saveSession(session);
+
+    return res.json({
+      ok: true,
+      callId,
+      reply,
+      state: {
+        language: session.language,
+        stage: session.stage,
+        repeatCount: session.repeatCount,
+        recapDone: session.recapDone,
+        upsellAttempted: session.upsellAttempted,
+        order: session.order,
+        currentItem: session.currentItem
+      }
+    });
+  } catch (error) {
+    console.error("/session/turn error:", error);
+    res.status(500).json({
+      ok: false,
+      error: "Internal server error"
+    });
+  }
+});
+
+/**
+ * Inspect session state for debugging
+ */
+app.get("/session/:callId", (req, res) => {
+  const { callId } = req.params;
+  const session = sessions.get(callId);
+
+  if (!session) {
+    return res.status(404).json({
+      ok: false,
+      error: "Session not found"
+    });
+  }
+
+  res.json({
+    ok: true,
+    session
+  });
+});
+
+/**
+ * End session and optionally delete it
+ */
+app.post("/session/end", (req, res) => {
+  try {
+    const { callId, deleteSession = false } = req.body || {};
+    if (!callId) {
+      return res.status(400).json({ ok: false, error: "callId is required" });
+    }
+
+    const session = sessions.get(callId);
+    if (!session) {
+      return res.json({ ok: true, message: "Session already ended or not found" });
+    }
+
+    session.callClosed = true;
+    saveSession(session);
+
+    if (deleteSession) {
+      sessions.delete(callId);
+    }
+
+    res.json({
+      ok: true,
+      message: "Session ended",
+      callId
+    });
+  } catch (error) {
+    console.error("/session/end error:", error);
+    res.status(500).json({
+      ok: false,
+      error: "Unable to end session"
+    });
+  }
+});
+
+/**
+ * Optional cleanup route for testing
+ */
+app.post("/admin/clear-sessions", (_req, res) => {
+  sessions.clear();
+  res.json({
+    ok: true,
+    message: "All sessions cleared"
+  });
+});
 
 app.listen(PORT, () => {
-  console.log("Jeffrey AI cashier running on port " + PORT);
+  console.log(`Demo Mode Jeffrey 1.2 listening on port ${PORT}`);
 });
