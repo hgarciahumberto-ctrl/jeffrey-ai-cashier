@@ -794,29 +794,59 @@ app.post("/voice", (req, res) => {
  */
 app.post("/speech", async (req, res) => {
   try {
-    const callId = req.query.callId || req.body.CallSid || `call-${Date.now()}`;
+
+    const callId =
+      req.query.callId ||
+      req.body.CallSid ||
+      `call-${Date.now()}`;
+
     const speech = req.body.SpeechResult || "";
 
+    // DEBUG: see exactly what Twilio heard
     console.log("TWILIO SPEECH RESULT:", speech);
-    console.log("TWILIO BODY:", req.body);
+    console.log("TWILIO BODY:", JSON.stringify(req.body, null, 2));
 
     const reply = await processJeffreyTurn(callId, speech);
 
     const session = sessions.get(callId);
+
     const twiml = new twilio.twiml.VoiceResponse();
 
+    // If the order is finished
     if (session?.callClosed || session?.stage === "close") {
+
       twiml.say(reply);
       twiml.hangup();
-      return xml(res, twiml);
+
+      res.type("text/xml");
+      res.send(twiml.toString());
+      return;
     }
 
+    // Continue conversation
     const gather = twiml.gather({
       input: "speech",
       action: `/speech?callId=${encodeURIComponent(callId)}`,
       method: "POST",
       speechTimeout: "auto"
     });
+
+    gather.say(reply);
+
+    res.type("text/xml");
+    res.send(twiml.toString());
+
+  } catch (error) {
+
+    console.error("/speech error:", error);
+
+    const twiml = new twilio.twiml.VoiceResponse();
+    twiml.say("We are sorry, an application error has occurred.");
+
+    res.type("text/xml");
+    res.send(twiml.toString());
+  }
+});
 
     gather.say(reply);
 
