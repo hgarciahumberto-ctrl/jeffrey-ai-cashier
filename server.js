@@ -28,9 +28,9 @@
  * - Good for owner demo / pilot proof of concept
  */
 
-const express = require("express");
-const cors = require("cors");
-const OpenAI = require("openai");
+import express from "express";
+import cors from "cors";
+import OpenAI from "openai";
 
 const app = express();
 app.use(cors());
