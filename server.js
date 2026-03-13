@@ -47,6 +47,9 @@ app.post("/speech", (req, res) => {
   res.type("text/xml");
   res.send(twiml.toString());
 });
+app.get("/voice", (_req, res) => {
+  res.send("Voice route is live. Twilio must call this route with POST.");
+});
 
 app.listen(PORT, () => {
   console.log(`Diagnostic server listening on port ${PORT}`);
