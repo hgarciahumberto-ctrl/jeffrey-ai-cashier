@@ -30,6 +30,7 @@
 
 import express from "express";
 import OpenAI from "openai";
+import twilio from "twilio";
 
 const app = express();
 app.use(express.json({ limit: "2mb" }));
@@ -773,6 +774,46 @@ app.get("/", (_req, res) => {
     service: "Demo Mode Jeffrey 1.2",
     time: nowIso()
   });
+});
+
+});
+  
+// TWILIO CALL ENTRY
+app.post("/voice", (req, res) => {
+  const twiml = new twilio.twiml.VoiceResponse();
+
+  const gather = twiml.gather({
+    input: "speech",
+    action: "/speech",
+    method: "POST",
+    speechTimeout: "auto"
+  });
+
+  gather.say(
+    "Thank you for calling Flaps and Racks. This is Jeffrey. Would you like to continue in English or Spanish?"
+  );
+
+  res.type("text/xml");
+  res.send(twiml.toString());
+});
+
+// SPEECH HANDLER
+app.post("/speech", (req, res) => {
+  const speech = req.body.SpeechResult || "";
+
+  const twiml = new twilio.twiml.VoiceResponse();
+
+  const gather = twiml.gather({
+    input: "speech",
+    action: "/speech",
+    method: "POST",
+    speechTimeout: "auto"
+  });
+
+  gather.say(`You said ${speech}. Jeffrey is now learning this demo flow.`);
+
+  res.type("text/xml");
+  res.send(twiml.toString());
 });
 
 app.get("/health", (_req, res) => {
