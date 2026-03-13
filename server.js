@@ -797,6 +797,9 @@ app.post("/speech", async (req, res) => {
     const callId = req.query.callId || req.body.CallSid || `call-${Date.now()}`;
     const speech = req.body.SpeechResult || "";
 
+    console.log("TWILIO SPEECH RESULT:", speech);
+    console.log("TWILIO BODY:", req.body);
+
     const reply = await processJeffreyTurn(callId, speech);
 
     const session = sessions.get(callId);
