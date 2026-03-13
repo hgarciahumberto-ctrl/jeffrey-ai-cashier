@@ -29,11 +29,9 @@
  */
 
 import express from "express";
-import cors from "cors";
 import OpenAI from "openai";
 
 const app = express();
-app.use(cors());
 app.use(express.json({ limit: "2mb" }));
 
 const PORT = process.env.PORT || 3000;
