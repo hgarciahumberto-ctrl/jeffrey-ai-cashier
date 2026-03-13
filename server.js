@@ -982,7 +982,8 @@ app.post("/voice", async (req, res) => {
       input: ["speech"],
       action: "/voice",
       method: "POST",
-      speechTimeout: "auto",
+      speechTimeout: "3",
+      timeout: 5,
       enhanced: true
     });
 
@@ -994,6 +995,8 @@ app.post("/voice", async (req, res) => {
       reply
     );
 
+    twiml.redirect("/voice");
+
     res.type("text/xml");
     res.status(200).send(twiml.toString());
   } catch (error) {
@@ -1003,7 +1006,8 @@ app.post("/voice", async (req, res) => {
       input: ["speech"],
       action: "/voice",
       method: "POST",
-      speechTimeout: "auto",
+      speechTimeout: "3",
+      timeout: 5,
       enhanced: true
     });
 
@@ -1011,6 +1015,8 @@ app.post("/voice", async (req, res) => {
       { voice: "Polly.Joanna-Generative", language: "en-US" },
       "Thank you for calling Flaps and Racks. This is Jeffrey. How can I help you today?"
     );
+
+    twiml.redirect("/voice");
 
     res.type("text/xml");
     res.status(200).send(twiml.toString());
