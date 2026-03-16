@@ -509,16 +509,30 @@ app.post("/speech", (req, res) => {
   if (session.stage === "name") {
     const name = detectLikelyName(speech);
 
-    if (name) {
-      session.pendingName = name;
-      session.stage = "confirm_name";
-      return speak(
-        res,
-        `I heard ${name}. Is that correct?`,
-        "/speech",
-        callId
-      );
-    }
+   if (session.stage === "name") {
+  const name = detectLikelyName(speech);
+
+  if (name) {
+    session.order.name = name;
+    session.stage = "done";
+
+    const dipPart = session.order.dip ? ` with ${session.order.dip}` : "";
+    return speak(
+      res,
+      `Perfect, ${session.order.name}. I have ${session.order.quantity} ${session.order.style} wings with ${session.order.sauce}${dipPart}. Your order is all set. Thank you for calling Flaps and Racks.`,
+      "/speech",
+      callId,
+      true
+    );
+  }
+
+  return speak(
+    res,
+    "Can I get a name for the order?",
+    "/speech",
+    callId
+  );
+}
 
     return speak(
       res,
