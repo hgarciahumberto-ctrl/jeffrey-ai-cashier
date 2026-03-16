@@ -542,52 +542,6 @@ app.post("/speech", (req, res) => {
     );
   }
 
-  if (session.stage === "confirm_name") {
-    if (isYes(text)) {
-      session.order.name = session.pendingName || "Customer";
-      session.stage = "done";
-
-      const dipPart = session.order.dip ? ` with ${session.order.dip}` : "";
-      return speak(
-        res,
-        `Perfect, ${session.order.name}. I have ${session.order.quantity} ${session.order.style} wings with ${session.order.sauce}${dipPart}. Your order is all set. Thank you for calling Flaps and Racks.`,
-        "/speech",
-        callId,
-        true
-      );
-    }
-
-    if (isNo(text)) {
-      session.pendingName = null;
-      session.stage = "name";
-      return speak(
-        res,
-        "Sorry about that. Please say the name for the order one more time.",
-        "/speech",
-        callId
-      );
-    }
-
-    // If caller just says another likely name instead of yes/no
-    const anotherName = detectLikelyName(speech);
-    if (anotherName) {
-      session.pendingName = anotherName;
-      return speak(
-        res,
-        `I heard ${anotherName}. Is that correct?`,
-        "/speech",
-        callId
-      );
-    }
-
-    return speak(
-      res,
-      "Please say yes if the name is correct, or say the name again.",
-      "/speech",
-      callId
-    );
-  }
-
   return speak(
     res,
     "Thank you for calling Flaps and Racks.",
