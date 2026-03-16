@@ -363,11 +363,38 @@ function buildOrderSummary(order) {
   return parts.join(" ");
 }
 
+// Fast, compact prompts
+function line(key, data = {}) {
+  const lines = {
+    welcome: "Thanks for calling Flaps and Racks. Jeffrey here. English or Spanish?",
+    spanishDemo: "Perfecto. This demo continues in English. What can I get started for you?",
+    askOrder: "What can I get started for you?",
+    askOrderExample: "You can say 12 traditional wings or 12 boneless buffalo mild.",
+    askStyle: `Got it. ${data.quantity} wings. Traditional or boneless?`,
+    askQty: `Got it. ${data.style} wings. How many?`,
+    askSauce: "What sauce would you like?",
+    askSauceShort: "Sauce?",
+    askDip: "Any dip? Ranch, blue cheese, or no dip?",
+    askAnythingElse: "Anything else?",
+    askName: "Name for the order? Please say just the name.",
+    retryName: "Sorry, just the name for the order.",
+    demoFinish: "For this demo I will finish the order here. Name for the order?",
+    closeNamed: `Perfect, ${data.name}. I have ${data.summary}. You are all set. Thanks for calling Flaps and Racks.`,
+    closeGuest: `Perfect. I have ${data.summary}. You are all set. Thanks for calling Flaps and Racks.`,
+    fallbackLanguage: "English or Spanish?",
+    fallbackDip: "Ranch, blue cheese, or no dip?",
+    fallbackAnythingElse: "Anything else?",
+    goodbye: "Thanks for calling Flaps and Racks."
+  };
+
+  return lines[key];
+}
+
 function speak(res, message, action, callId, endCall = false) {
   const twiml = new twilio.twiml.VoiceResponse();
 
   if (endCall) {
-    twiml.say({ voice: "alice" }, message);
+    twiml.say({ voice: "woman" }, message);
     twiml.hangup();
     res.type("text/xml");
     res.send(twiml.toString());
@@ -378,10 +405,11 @@ function speak(res, message, action, callId, endCall = false) {
     input: "speech",
     action: `${action}?callId=${encodeURIComponent(callId)}`,
     method: "POST",
-    speechTimeout: "auto"
+    speechTimeout: "auto",
+    timeout: 2
   });
 
-  gather.say({ voice: "alice" }, message);
+  gather.say({ voice: "woman" }, message);
 
   res.type("text/xml");
   res.send(twiml.toString());
@@ -403,12 +431,7 @@ app.post("/voice", (req, res) => {
   const callId = req.body.CallSid || `call-${Date.now()}`;
   resetSession(callId);
 
-  speak(
-    res,
-    "Thank you for calling Flaps and Racks. This is Jeffrey. Would you like English or Spanish today?",
-    "/speech",
-    callId
-  );
+  return speak(res, line("welcome"), "/speech", callId);
 });
 
 app.post("/speech", (req, res) => {
@@ -431,68 +454,38 @@ app.post("/speech", (req, res) => {
         session.language = "spanish";
         session.stage = "wings";
         resetRetry(session);
-
-        return speak(
-          res,
-          "Perfecto. Por ahora esta demo sigue en ingles. What can I get started for you today?",
-          "/speech",
-          callId
-        );
+        return speak(res, line("spanishDemo"), "/speech", callId);
       }
 
       if (isEnglish(text) || !speech) {
         session.language = "english";
         session.stage = "wings";
         resetRetry(session);
-
-        return speak(
-          res,
-          "Perfect. What can I get started for you today?",
-          "/speech",
-          callId
-        );
+        return speak(res, line("askOrder"), "/speech", callId);
       }
 
       bumpRetry(session);
-
-      return speak(
-        res,
-        "Would you like English or Spanish today?",
-        "/speech",
-        callId
-      );
+      return speak(res, line("fallbackLanguage"), "/speech", callId);
     }
 
     if (session.stage === "wings") {
       if (order.quantity && order.style && order.sauce) {
         session.stage = "dip";
         resetRetry(session);
-
-        return speak(
-          res,
-          `Got it. ${order.quantity} ${order.style} wings with ${order.sauce}. Would you like ranch, blue cheese, or no dip?`,
-          "/speech",
-          callId
-        );
+        return speak(res, line("askDip"), "/speech", callId);
       }
 
       if (order.quantity && order.style) {
         session.stage = "sauce";
         resetRetry(session);
-
-        return speak(
-          res,
-          `Got it. ${order.quantity} ${order.style} wings. What sauce would you like on those?`,
-          "/speech",
-          callId
-        );
+        return speak(res, line("askSauceShort"), "/speech", callId);
       }
 
       if (order.quantity && !order.style) {
         resetRetry(session);
         return speak(
           res,
-          `I heard ${order.quantity}. Would you like traditional or boneless?`,
+          line("askStyle", { quantity: order.quantity }),
           "/speech",
           callId
         );
@@ -502,7 +495,7 @@ app.post("/speech", (req, res) => {
         resetRetry(session);
         return speak(
           res,
-          `Got it, ${order.style} wings. How many would you like?`,
+          line("askQty", { style: order.style }),
           "/speech",
           callId
         );
@@ -511,20 +504,10 @@ app.post("/speech", (req, res) => {
       bumpRetry(session);
 
       if (session.retries >= 2) {
-        return speak(
-          res,
-          "You can say something like 12 traditional wings, or 12 boneless buffalo mild.",
-          "/speech",
-          callId
-        );
+        return speak(res, line("askOrderExample"), "/speech", callId);
       }
 
-      return speak(
-        res,
-        "What wing order can I start for you?",
-        "/speech",
-        callId
-      );
+      return speak(res, line("askOrder"), "/speech", callId);
     }
 
     if (session.stage === "sauce") {
@@ -534,44 +517,22 @@ app.post("/speech", (req, res) => {
         order.sauce = sauce;
         session.stage = "dip";
         resetRetry(session);
-
-        return speak(
-          res,
-          `Perfect. ${order.sauce}. Would you like ranch, blue cheese, or no dip?`,
-          "/speech",
-          callId
-        );
+        return speak(res, line("askDip"), "/speech", callId);
       }
 
       if (order.quantity && order.style && order.sauce) {
         session.stage = "dip";
         resetRetry(session);
-
-        return speak(
-          res,
-          `Got it. ${order.quantity} ${order.style} wings with ${order.sauce}. Would you like ranch, blue cheese, or no dip?`,
-          "/speech",
-          callId
-        );
+        return speak(res, line("askDip"), "/speech", callId);
       }
 
       bumpRetry(session);
 
       if (session.retries >= 2) {
-        return speak(
-          res,
-          "What sauce would you like? You can say buffalo mild, buffalo hot, lime pepper, garlic parmesan, barbecue, or plain.",
-          "/speech",
-          callId
-        );
+        return speak(res, line("askSauce"), "/speech", callId);
       }
 
-      return speak(
-        res,
-        "What sauce would you like on those?",
-        "/speech",
-        callId
-      );
+      return speak(res, line("askSauceShort"), "/speech", callId);
     }
 
     if (session.stage === "dip") {
@@ -581,71 +542,35 @@ app.post("/speech", (req, res) => {
         order.dip = dip === "none" ? null : dip;
         session.stage = "anything_else";
         resetRetry(session);
-
-        return speak(
-          res,
-          "Great. Anything else for you today?",
-          "/speech",
-          callId
-        );
+        return speak(res, line("askAnythingElse"), "/speech", callId);
       }
 
       if (isDone(text) || isNo(text)) {
         order.dip = null;
         session.stage = "anything_else";
         resetRetry(session);
-
-        return speak(
-          res,
-          "No problem. Anything else for you today?",
-          "/speech",
-          callId
-        );
+        return speak(res, line("askAnythingElse"), "/speech", callId);
       }
 
       bumpRetry(session);
-
-      return speak(
-        res,
-        "Would you like ranch, blue cheese, or no dip?",
-        "/speech",
-        callId
-      );
+      return speak(res, line("fallbackDip"), "/speech", callId);
     }
 
     if (session.stage === "anything_else") {
       if (isDone(text) || isNo(text)) {
         session.stage = "name";
         resetRetry(session);
-
-        return speak(
-          res,
-          "Perfect. Can I get the name for the order? Please say just the name.",
-          "/speech",
-          callId
-        );
+        return speak(res, line("askName"), "/speech", callId);
       }
 
       if (isYes(text) || text.length > 0) {
         session.stage = "name";
         resetRetry(session);
-
-        return speak(
-          res,
-          "For this demo, I will go ahead and finish this order here. Can I get the name for the order? Please say just the name.",
-          "/speech",
-          callId
-        );
+        return speak(res, line("demoFinish"), "/speech", callId);
       }
 
       bumpRetry(session);
-
-      return speak(
-        res,
-        "Anything else for you today?",
-        "/speech",
-        callId
-      );
+      return speak(res, line("fallbackAnythingElse"), "/speech", callId);
     }
 
     if (session.stage === "name") {
@@ -677,7 +602,7 @@ app.post("/speech", (req, res) => {
 
         return speak(
           res,
-          `Perfect, ${order.name}. I have ${summary}. Your order is all set. Thank you for calling Flaps and Racks.`,
+          line("closeNamed", { name: order.name, summary }),
           "/speech",
           callId,
           true
@@ -695,37 +620,26 @@ app.post("/speech", (req, res) => {
 
         return speak(
           res,
-          `Perfect. I have ${summary}. Your order is all set. Thank you for calling Flaps and Racks.`,
+          line("closeGuest", { summary }),
           "/speech",
           callId,
           true
         );
       }
 
-      return speak(
-        res,
-        "Sorry about that. Please say just the name for the order.",
-        "/speech",
-        callId
-      );
+      return speak(res, line("retryName"), "/speech", callId);
     }
 
-    return speak(
-      res,
-      "Thank you for calling Flaps and Racks.",
-      "/speech",
-      callId,
-      true
-    );
+    return speak(res, line("goodbye"), "/speech", callId, true);
   } catch (error) {
     console.error("/speech error:", error);
     const twiml = new twilio.twiml.VoiceResponse();
-    twiml.say({ voice: "alice" }, "We are sorry, an application error has occurred.");
+    twiml.say({ voice: "woman" }, "We are sorry, an application error has occurred.");
     res.type("text/xml");
     res.send(twiml.toString());
   }
 });
 
 app.listen(PORT, () => {
-  console.log(`AI Cashier 1.3 listening on port ${PORT}`);
+  console.log(`AI Cashier 1.3.1 Speed Pass listening on port ${PORT}`);
 });
