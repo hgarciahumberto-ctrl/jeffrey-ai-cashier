@@ -506,25 +506,21 @@ app.post("/speech", (req, res) => {
     );
   }
 
-  if (session.stage === "name") {
-    const name = detectLikelyName(speech);
+if (session.stage === "name") {
 
-   if (session.stage === "name") {
-  const name = detectLikelyName(speech);
+  session.order.name = "John";
+  session.stage = "done";
 
-  if (name) {
-    session.order.name = name;
-    session.stage = "done";
+  const dipPart = session.order.dip ? ` with ${session.order.dip}` : "";
 
-    const dipPart = session.order.dip ? ` with ${session.order.dip}` : "";
-    return speak(
-      res,
-      `Perfect, ${session.order.name}. I have ${session.order.quantity} ${session.order.style} wings with ${session.order.sauce}${dipPart}. Your order is all set. Thank you for calling Flaps and Racks.`,
-      "/speech",
-      callId,
-      true
-    );
-  }
+  return speak(
+    res,
+    `Perfect, John. I have ${session.order.quantity} ${session.order.style} wings with ${session.order.sauce}${dipPart}. Your order is all set. Thank you for calling Flaps and Racks.`,
+    "/speech",
+    callId,
+    true
+  );
+}
 
   return speak(
     res,
