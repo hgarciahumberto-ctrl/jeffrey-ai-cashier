@@ -21,15 +21,6 @@ function normalize(text = "") {
     .trim();
 }
 
-function titleCase(text = "") {
-  return String(text)
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean)
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-    .join(" ");
-}
-
 function getSession(callId) {
   if (!sessions.has(callId)) {
     sessions.set(callId, {
@@ -41,8 +32,7 @@ function getSession(callId) {
         sauce: null,
         dip: null,
         name: null
-      },
-      pendingName: null
+      }
     });
   }
   return sessions.get(callId);
@@ -58,51 +48,35 @@ function resetSession(callId) {
       sauce: null,
       dip: null,
       name: null
-    },
-    pendingName: null
+    }
   });
 }
 
 function isEnglish(text) {
   const t = normalize(text);
-  return (
-    t.includes("english") ||
-    t.includes("ingles") ||
-    t === "englis"
-  );
+  return t.includes("english") || t.includes("ingles") || t === "englis";
 }
 
 function isSpanish(text) {
   const t = normalize(text);
-  return (
-    t.includes("spanish") ||
-    t.includes("espanol") ||
-    t.includes("espanol")
-  );
-}
-
-function isYes(text) {
-  const t = normalize(text);
-  return (
-    t === "yes" ||
-    t === "yeah" ||
-    t === "yep" ||
-    t === "correct" ||
-    t === "thats right" ||
-    t === "that's right" ||
-    t === "right" ||
-    t === "si" ||
-    t === "sí" ||
-    t === "claro"
-  );
+  return t.includes("spanish") || t.includes("espanol");
 }
 
 function isNo(text) {
   const t = normalize(text);
+  return t === "no" || t === "nope" || t === "nah";
+}
+
+function isDone(text) {
+  const t = normalize(text);
   return (
-    t === "no" ||
-    t === "nope" ||
-    t === "nah"
+    t.includes("thats all") ||
+    t.includes("thats it") ||
+    t.includes("nothing else") ||
+    t.includes("im good") ||
+    t.includes("done") ||
+    t.includes("eso es todo") ||
+    t.includes("nada mas")
   );
 }
 
@@ -119,10 +93,7 @@ function detectWingStyle(text) {
     return "traditional";
   }
 
-  if (
-    t.includes("boneless") ||
-    t.includes("bone less")
-  ) {
+  if (t.includes("boneless") || t.includes("bone less")) {
     return "boneless";
   }
 
@@ -135,14 +106,14 @@ function detectQuantity(text) {
   const direct = t.match(/\b(6|8|10|12|16|20|24|30|40|50)\b/);
   if (direct) return Number(direct[1]);
 
-  const map = [
+  const phrases = [
     ["six", 6],
     ["eight", 8],
     ["ten", 10],
     ["twelve", 12],
     ["sixteen", 16],
-    ["twenty", 20],
     ["twenty four", 24],
+    ["twenty", 20],
     ["thirty", 30],
     ["forty", 40],
     ["fifty", 50],
@@ -157,7 +128,7 @@ function detectQuantity(text) {
     ["cincuenta", 50]
   ];
 
-  for (const [phrase, value] of map) {
+  for (const [phrase, value] of phrases) {
     if (t.includes(phrase)) return value;
   }
 
@@ -172,32 +143,23 @@ function detectSauce(text) {
     t.includes("mild buffalo") ||
     t.includes("buffalo mile") ||
     t.includes("buffalo my old") ||
-    t.includes("buffalo milds")
+    t === "buffalo"
   ) {
     return "buffalo mild";
   }
 
-  if (
-    t.includes("buffalo hot") ||
-    t.includes("hot buffalo")
-  ) {
+  if (t.includes("buffalo hot") || t.includes("hot buffalo")) {
     return "buffalo hot";
   }
 
-  if (
-    t === "buffalo" ||
-    t.includes(" buffalo ")
-  ) {
-    return "buffalo mild";
+  if (t.includes("lime pepper")) {
+    return "lime pepper";
   }
-
-  if (t.includes("lime pepper")) return "lime pepper";
 
   if (
     t.includes("garlic parmesan") ||
     t.includes("garlic parm") ||
-    t.includes("garlic parma") ||
-    t.includes("garlic parmesan")
+    t.includes("garlic parma")
   ) {
     return "garlic parmesan";
   }
@@ -210,7 +172,9 @@ function detectSauce(text) {
     return "bbq";
   }
 
-  if (t.includes("plain") || t.includes("no sauce")) return "plain";
+  if (t.includes("plain") || t.includes("no sauce")) {
+    return "plain";
+  }
 
   return null;
 }
@@ -235,76 +199,6 @@ function detectDip(text) {
     t.includes("nothing")
   ) {
     return "none";
-  }
-
-  return null;
-}
-
-function isDone(text) {
-  const t = normalize(text);
-
-  return (
-    t.includes("thats all") ||
-    t.includes("that's all") ||
-    t.includes("thats it") ||
-    t.includes("that's it") ||
-    t.includes("nothing else") ||
-    t.includes("im good") ||
-    t.includes("i'm good") ||
-    t.includes("done") ||
-    t.includes("eso es todo") ||
-    t.includes("nada mas")
-  );
-}
-
-function detectLikelyName(text) {
-  const raw = String(text || "").trim();
-  const t = normalize(raw);
-
-  if (!raw) return null;
-  if (raw.length > 40) return null;
-
-  const blockedWords = [
-    "buffalo",
-    "ranch",
-    "blue cheese",
-    "traditional",
-    "boneless",
-    "wings",
-    "wing",
-    "fries",
-    "drink",
-    "thats all",
-    "nothing else",
-    "english",
-    "spanish",
-    "yes",
-    "no"
-  ];
-
-  if (blockedWords.some((word) => t.includes(word))) {
-    return null;
-  }
-
-  const patterns = [
-    /my name is ([a-zA-Z\s'-]+)/i,
-    /name is ([a-zA-Z\s'-]+)/i,
-    /its ([a-zA-Z\s'-]+)/i,
-    /it's ([a-zA-Z\s'-]+)/i,
-    /this is ([a-zA-Z\s'-]+)/i,
-    /^([a-zA-Z][a-zA-Z\s'-]{1,30})$/i
-  ];
-
-  for (const pattern of patterns) {
-    const match = raw.match(pattern);
-    if (match && match[1]) {
-      return titleCase(match[1].trim());
-    }
-  }
-
-  // Fallback: accept short plain responses as likely names
-  if (raw.split(/\s+/).length <= 3 && /^[a-zA-Z\s'-]+$/.test(raw)) {
-    return titleCase(raw);
   }
 
   return null;
@@ -359,194 +253,184 @@ app.post("/voice", (req, res) => {
 });
 
 app.post("/speech", (req, res) => {
-  const callId = req.query.callId || req.body.CallSid || `call-${Date.now()}`;
-  const speech = req.body.SpeechResult || "";
+  try {
+    const callId = req.query.callId || req.body.CallSid || `call-${Date.now()}`;
+    const speech = req.body.SpeechResult || "";
+    const text = normalize(speech);
 
-  console.log("TWILIO SPEECH RESULT:", speech);
-  console.log("TWILIO BODY:", JSON.stringify(req.body, null, 2));
+    console.log("TWILIO SPEECH RESULT:", speech);
+    console.log("TWILIO BODY:", JSON.stringify(req.body, null, 2));
 
-  const session = getSession(callId);
-  const text = normalize(speech);
+    const session = getSession(callId);
 
-  if (session.stage === "language") {
-    if (isEnglish(text) || !speech) {
-      session.language = "english";
-      session.stage = "wings";
+    if (session.stage === "language") {
+      if (isEnglish(text) || !speech) {
+        session.language = "english";
+        session.stage = "wings";
+        return speak(
+          res,
+          "Perfect. What can I get started for you today?",
+          "/speech",
+          callId
+        );
+      }
+
+      if (isSpanish(text)) {
+        session.language = "spanish";
+        session.stage = "wings";
+        return speak(
+          res,
+          "Perfecto. Que le puedo preparar hoy?",
+          "/speech",
+          callId
+        );
+      }
+
       return speak(
         res,
-        "Perfect. What can I get started for you today?",
+        "Would you like English or Spanish today?",
         "/speech",
         callId
       );
     }
 
-    if (isSpanish(text)) {
-      session.language = "spanish";
-      session.stage = "wings";
+    if (session.stage === "wings") {
+      const qty = detectQuantity(text);
+      const style = detectWingStyle(text);
+
+      if (qty) session.order.quantity = qty;
+      if (style) session.order.style = style;
+
+      if (session.order.quantity && session.order.style) {
+        session.stage = "sauce";
+        return speak(
+          res,
+          `Got it. ${session.order.quantity} ${session.order.style} wings. What sauce would you like on those?`,
+          "/speech",
+          callId
+        );
+      }
+
+      if (session.order.quantity && !session.order.style) {
+        return speak(
+          res,
+          `I heard ${session.order.quantity}. Would you like traditional or boneless wings?`,
+          "/speech",
+          callId
+        );
+      }
+
+      if (!session.order.quantity && session.order.style) {
+        return speak(
+          res,
+          `Got it, ${session.order.style} wings. How many would you like?`,
+          "/speech",
+          callId
+        );
+      }
+
       return speak(
         res,
-        "Perfecto. Que le puedo preparar hoy?",
+        "Please tell me the wing order, for example 12 traditional wings or 12 boneless wings.",
         "/speech",
         callId
+      );
+    }
+
+    if (session.stage === "sauce") {
+      const sauce = detectSauce(text);
+
+      if (sauce) {
+        session.order.sauce = sauce;
+        session.stage = "dip";
+        return speak(
+          res,
+          `Perfect. ${sauce}. Any dipping sauce like ranch or blue cheese?`,
+          "/speech",
+          callId
+        );
+      }
+
+      return speak(
+        res,
+        "What sauce would you like on those? You can say buffalo mild, lime pepper, garlic parmesan, or barbecue.",
+        "/speech",
+        callId
+      );
+    }
+
+    if (session.stage === "dip") {
+      const dip = detectDip(text);
+
+      if (dip) {
+        session.order.dip = dip === "none" ? null : dip;
+        session.stage = "anything_else";
+        return speak(
+          res,
+          "Got it. Anything else for you today?",
+          "/speech",
+          callId
+        );
+      }
+
+      return speak(
+        res,
+        "Would you like ranch, blue cheese, or no dip?",
+        "/speech",
+        callId
+      );
+    }
+
+    if (session.stage === "anything_else") {
+      if (isDone(text) || isNo(text)) {
+        session.stage = "name";
+        return speak(
+          res,
+          "Perfect. Can I get a name for the order?",
+          "/speech",
+          callId
+        );
+      }
+
+      return speak(
+        res,
+        "For this demo, lets finish this order. Can I get a name for the order?",
+        "/speech",
+        callId
+      );
+    }
+
+    if (session.stage === "name") {
+      session.order.name = "John";
+      session.stage = "done";
+
+      const dipPart = session.order.dip ? ` and ${session.order.dip} on the side` : "";
+
+      return speak(
+        res,
+        `Perfect, John. I have ${session.order.quantity} ${session.order.style} wings with ${session.order.sauce}${dipPart}. Your order is all set. Thank you for calling Flaps and Racks.`,
+        "/speech",
+        callId,
+        true
       );
     }
 
     return speak(
       res,
-      "Would you like English or Spanish today?",
+      "Thank you for calling Flaps and Racks.",
       "/speech",
-      callId
+      callId,
+      true
     );
+  } catch (error) {
+    console.error("/speech error:", error);
+    const twiml = new twilio.twiml.VoiceResponse();
+    twiml.say("We are sorry, an application error has occurred.");
+    res.type("text/xml");
+    res.send(twiml.toString());
   }
-
-  if (session.stage === "wings") {
-    const qty = detectQuantity(text);
-    const style = detectWingStyle(text);
-
-    if (qty) session.order.quantity = qty;
-    if (style) session.order.style = style;
-
-    // Allow things like "12 traditional" or "traditional wings"
-    if (session.order.quantity && session.order.style) {
-      session.stage = "sauce";
-      return speak(
-        res,
-        `Got it. ${session.order.quantity} ${session.order.style} wings. What sauce would you like on those?`,
-        "/speech",
-        callId
-      );
-    }
-
-    if (session.order.quantity && !session.order.style) {
-      return speak(
-        res,
-        `I heard ${session.order.quantity}. Would you like traditional or boneless wings?`,
-        "/speech",
-        callId
-      );
-    }
-
-    if (!session.order.quantity && session.order.style) {
-      return speak(
-        res,
-        `Got it, ${session.order.style} wings. How many would you like?`,
-        "/speech",
-        callId
-      );
-    }
-
-    return speak(
-      res,
-      "Please tell me the wing order, for example 12 traditional wings or 12 boneless wings.",
-      "/speech",
-      callId
-    );
-  }
-
-  if (session.stage === "sauce") {
-    const sauce = detectSauce(text);
-
-    if (sauce) {
-      session.order.sauce = sauce;
-      session.stage = "dip";
-      return speak(
-        res,
-        `Perfect. ${sauce}. Any dipping sauce like ranch or blue cheese?`,
-        "/speech",
-        callId
-      );
-    }
-
-    return speak(
-      res,
-      "What sauce would you like on those? You can say buffalo mild, lime pepper, garlic parmesan, or barbecue.",
-      "/speech",
-      callId
-    );
-  }
-
-  if (session.stage === "dip") {
-    const dip = detectDip(text);
-
-    if (dip) {
-      session.order.dip = dip === "none" ? null : dip;
-      session.stage = "anything_else";
-      return speak(
-        res,
-        "Got it. Anything else for you today?",
-        "/speech",
-        callId
-      );
-    }
-
-    return speak(
-      res,
-      "Would you like ranch, blue cheese, or no dip?",
-      "/speech",
-      callId
-    );
-  }
-
-  if (session.stage === "anything_else") {
-    if (isDone(text) || isNo(text)) {
-      session.stage = "name";
-      return speak(
-        res,
-        "Perfect. Can I get a name for the order?",
-        "/speech",
-        callId
-      );
-    }
-
-    return speak(
-      res,
-      "For this demo, lets finish this order. Can I get a name for the order?",
-      "/speech",
-      callId
-    );
-  }
-
-if (session.stage === "name") {
-
-  session.order.name = "John";
-  session.stage = "done";
-
-  const dipPart = session.order.dip ? ` with ${session.order.dip}` : "";
-
-  return speak(
-    res,
-    `Perfect, John. I have ${session.order.quantity} ${session.order.style} wings with ${session.order.sauce}${dipPart}. Your order is all set. Thank you for calling Flaps and Racks.`,
-    "/speech",
-    callId,
-    true
-  );
-}
-
-  return speak(
-    res,
-    "Can I get a name for the order?",
-    "/speech",
-    callId
-  );
-}
-
-    return speak(
-      res,
-      "Can I get a name for the order?",
-      "/speech",
-      callId
-    );
-  }
-
-  return speak(
-    res,
-    "Thank you for calling Flaps and Racks.",
-    "/speech",
-    callId,
-    true
-  );
 });
 
 app.listen(PORT, () => {
-  console.log(`Small working cashier v2 listening on port ${PORT}`);
+  console.log(`Small working cashier v3 listening on port ${PORT}`);
 });
