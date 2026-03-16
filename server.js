@@ -406,7 +406,8 @@ function speak(res, message, action, callId, endCall = false) {
     action: `${action}?callId=${encodeURIComponent(callId)}`,
     method: "POST",
     speechTimeout: "auto",
-    timeout: 2
+    timeout: 5,
+    actionOnEmptyResult: true
   });
 
   gather.say({ voice: "woman" }, message);
