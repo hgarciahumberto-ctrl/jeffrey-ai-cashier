@@ -310,9 +310,7 @@ function detectLikelyName(text) {
 
   if (parts.length >= 1 && parts.length <= 3) {
     return parts
-      .map(
-        (part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase()
-      )
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
       .join(" ");
   }
 
@@ -365,34 +363,53 @@ function buildOrderSummary(order) {
 
 function line(key, data = {}) {
   const lines = {
-    welcome: "Thanks for calling Flaps and Racks. Jeffrey here. English or Spanish?",
-    spanishDemo: "Perfecto. This demo continues in English. What can I get started for you today?",
-    askOrder: "What can I get started for you today?",
-    askOrderExample: "You can say, 12 traditional wings, or 12 boneless buffalo mild.",
-    askStyle: `Got it. ${data.quantity} wings. Traditional or boneless?`,
-    askQty: `Got it. ${data.style} wings. How many would you like?`,
-    askSauce: "What sauce would you like on those?",
-    askSauceShort: "What sauce would you like?",
-    askDip: "Would you like a dip with that? Ranch, blue cheese, or no dip?",
-    askAnythingElse: "Anything else for you today?",
-    askName: "What name should I put on the order? Please say just the name.",
-    retryName: "Sorry about that. Please say just the name for the order.",
-    demoFinish: "For this demo, I will go ahead and finish the order here. What name should I put on the order?",
-    closeNamed: `Perfect, ${data.name}. I have ${data.summary}. You are all set. Thanks for calling Flaps and Racks.`,
-    closeGuest: `Perfect. I have ${data.summary}. You are all set. Thanks for calling Flaps and Racks.`,
-    fallbackLanguage: "English or Spanish?",
-    fallbackDip: "Would you like ranch, blue cheese, or no dip?",
-    fallbackAnythingElse: "Anything else?",
-    goodbye: "Thanks for calling Flaps and Racks."
+    welcome:
+      "Thank you for calling Flaps and Racks. This is Jeffrey. Would you like English or Spanish today?",
+    spanishDemo:
+      "Perfecto. For this demo, we will continue in English. What can I get started for you today?",
+    askOrder:
+      "What can I get started for you today?",
+    askOrderExample:
+      "You can say 12 traditional wings, or 12 boneless buffalo mild.",
+    askStyle:
+      `Got it. ${data.quantity} wings. Would you like traditional or boneless?`,
+    askQty:
+      `Got it. ${data.style} wings. How many would you like?`,
+    askSauce:
+      "What sauce would you like on those?",
+    askSauceRetry:
+      "What sauce would you like? You can say buffalo mild, buffalo hot, lime pepper, garlic parmesan, barbecue, or plain.",
+    askDip:
+      "Would you like a dip with that? Ranch, blue cheese, or no dip?",
+    askAnythingElse:
+      "Anything else for you today, or is that everything?",
+    askName:
+      "Perfect. What name should I put on the order? Please say just the name.",
+    retryName:
+      "Sorry about that. Please say just the name for the order.",
+    demoFinish:
+      "For this demo, I will go ahead and finish the order here. What name should I put on the order?",
+    closeNamed:
+      `Perfect, ${data.name}. I have ${data.summary}. Your order is all set. Thank you for calling Flaps and Racks.`,
+    closeGuest:
+      `Perfect. I have ${data.summary}. Your order is all set. Thank you for calling Flaps and Racks.`,
+    fallbackLanguage:
+      "Would you like English or Spanish today?",
+    fallbackDip:
+      "Would you like ranch, blue cheese, or no dip?",
+    fallbackAnythingElse:
+      "Anything else for you today?",
+    goodbye:
+      "Thank you for calling Flaps and Racks."
   };
 
   return lines[key];
 }
 
-// Uses the Twilio Console language mapping for en-US.
-// Set en-US to a Neural voice in Twilio Console first.
+// Force Amazon Polly Matthew Neural directly
 function sayOptions() {
   return {
+    voice: "Polly.Matthew-Neural",
     language: "en-US"
   };
 }
@@ -462,35 +479,66 @@ app.post("/speech", (req, res) => {
         session.language = "spanish";
         session.stage = "wings";
         resetRetry(session);
-        return speak(res, line("spanishDemo"), "/speech", callId);
+
+        return speak(
+          res,
+          line("spanishDemo"),
+          "/speech",
+          callId
+        );
       }
 
       if (isEnglish(text) || !speech) {
         session.language = "english";
         session.stage = "wings";
         resetRetry(session);
-        return speak(res, line("askOrder"), "/speech", callId);
+
+        return speak(
+          res,
+          line("askOrder"),
+          "/speech",
+          callId
+        );
       }
 
       bumpRetry(session);
-      return speak(res, line("fallbackLanguage"), "/speech", callId);
+
+      return speak(
+        res,
+        line("fallbackLanguage"),
+        "/speech",
+        callId
+      );
     }
 
     if (session.stage === "wings") {
       if (order.quantity && order.style && order.sauce) {
         session.stage = "dip";
         resetRetry(session);
-        return speak(res, line("askDip"), "/speech", callId);
+
+        return speak(
+          res,
+          line("askDip"),
+          "/speech",
+          callId
+        );
       }
 
       if (order.quantity && order.style) {
         session.stage = "sauce";
         resetRetry(session);
-        return speak(res, line("askSauceShort"), "/speech", callId);
+
+        return speak(
+          res,
+          line("askSauce"),
+          "/speech",
+          callId
+        );
       }
 
       if (order.quantity && !order.style) {
         resetRetry(session);
+
         return speak(
           res,
           line("askStyle", { quantity: order.quantity }),
@@ -501,6 +549,7 @@ app.post("/speech", (req, res) => {
 
       if (!order.quantity && order.style) {
         resetRetry(session);
+
         return speak(
           res,
           line("askQty", { style: order.style }),
@@ -512,10 +561,20 @@ app.post("/speech", (req, res) => {
       bumpRetry(session);
 
       if (session.retries >= 2) {
-        return speak(res, line("askOrderExample"), "/speech", callId);
+        return speak(
+          res,
+          line("askOrderExample"),
+          "/speech",
+          callId
+        );
       }
 
-      return speak(res, line("askOrder"), "/speech", callId);
+      return speak(
+        res,
+        line("askOrder"),
+        "/speech",
+        callId
+      );
     }
 
     if (session.stage === "sauce") {
@@ -525,22 +584,44 @@ app.post("/speech", (req, res) => {
         order.sauce = sauce;
         session.stage = "dip";
         resetRetry(session);
-        return speak(res, line("askDip"), "/speech", callId);
+
+        return speak(
+          res,
+          line("askDip"),
+          "/speech",
+          callId
+        );
       }
 
       if (order.quantity && order.style && order.sauce) {
         session.stage = "dip";
         resetRetry(session);
-        return speak(res, line("askDip"), "/speech", callId);
+
+        return speak(
+          res,
+          line("askDip"),
+          "/speech",
+          callId
+        );
       }
 
       bumpRetry(session);
 
       if (session.retries >= 2) {
-        return speak(res, line("askSauce"), "/speech", callId);
+        return speak(
+          res,
+          line("askSauceRetry"),
+          "/speech",
+          callId
+        );
       }
 
-      return speak(res, line("askSauceShort"), "/speech", callId);
+      return speak(
+        res,
+        line("askSauce"),
+        "/speech",
+        callId
+      );
     }
 
     if (session.stage === "dip") {
@@ -550,35 +631,71 @@ app.post("/speech", (req, res) => {
         order.dip = dip === "none" ? null : dip;
         session.stage = "anything_else";
         resetRetry(session);
-        return speak(res, line("askAnythingElse"), "/speech", callId);
+
+        return speak(
+          res,
+          line("askAnythingElse"),
+          "/speech",
+          callId
+        );
       }
 
       if (isDone(text) || isNo(text)) {
         order.dip = null;
         session.stage = "anything_else";
         resetRetry(session);
-        return speak(res, line("askAnythingElse"), "/speech", callId);
+
+        return speak(
+          res,
+          line("askAnythingElse"),
+          "/speech",
+          callId
+        );
       }
 
       bumpRetry(session);
-      return speak(res, line("fallbackDip"), "/speech", callId);
+
+      return speak(
+        res,
+        line("fallbackDip"),
+        "/speech",
+        callId
+      );
     }
 
     if (session.stage === "anything_else") {
       if (isDone(text) || isNo(text)) {
         session.stage = "name";
         resetRetry(session);
-        return speak(res, line("askName"), "/speech", callId);
+
+        return speak(
+          res,
+          line("askName"),
+          "/speech",
+          callId
+        );
       }
 
       if (isYes(text) || text.length > 0) {
         session.stage = "name";
         resetRetry(session);
-        return speak(res, line("demoFinish"), "/speech", callId);
+
+        return speak(
+          res,
+          line("demoFinish"),
+          "/speech",
+          callId
+        );
       }
 
       bumpRetry(session);
-      return speak(res, line("fallbackAnythingElse"), "/speech", callId);
+
+      return speak(
+        res,
+        line("fallbackAnythingElse"),
+        "/speech",
+        callId
+      );
     }
 
     if (session.stage === "name") {
@@ -594,9 +711,7 @@ app.post("/speech", (req, res) => {
             .trim()
             .split(/\s+/)
             .filter(Boolean)
-            .map(
-              (part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase()
-            )
+            .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
             .join(" ");
         }
       }
@@ -635,10 +750,21 @@ app.post("/speech", (req, res) => {
         );
       }
 
-      return speak(res, line("retryName"), "/speech", callId);
+      return speak(
+        res,
+        line("retryName"),
+        "/speech",
+        callId
+      );
     }
 
-    return speak(res, line("goodbye"), "/speech", callId, true);
+    return speak(
+      res,
+      line("goodbye"),
+      "/speech",
+      callId,
+      true
+    );
   } catch (error) {
     console.error("/speech error:", error);
     const twiml = new twilio.twiml.VoiceResponse();
@@ -649,5 +775,5 @@ app.post("/speech", (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`AI Cashier 1.4 Human Voice Pass listening on port ${PORT}`);
+  console.log(`AI Cashier 1.4 Matthew Voice Pass listening on port ${PORT}`);
 });
