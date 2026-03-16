@@ -363,26 +363,25 @@ function buildOrderSummary(order) {
   return parts.join(" ");
 }
 
-// Fast, compact prompts
 function line(key, data = {}) {
   const lines = {
     welcome: "Thanks for calling Flaps and Racks. Jeffrey here. English or Spanish?",
-    spanishDemo: "Perfecto. This demo continues in English. What can I get started for you?",
-    askOrder: "What can I get started for you?",
-    askOrderExample: "You can say 12 traditional wings or 12 boneless buffalo mild.",
+    spanishDemo: "Perfecto. This demo continues in English. What can I get started for you today?",
+    askOrder: "What can I get started for you today?",
+    askOrderExample: "You can say, 12 traditional wings, or 12 boneless buffalo mild.",
     askStyle: `Got it. ${data.quantity} wings. Traditional or boneless?`,
-    askQty: `Got it. ${data.style} wings. How many?`,
-    askSauce: "What sauce would you like?",
-    askSauceShort: "Sauce?",
-    askDip: "Any dip? Ranch, blue cheese, or no dip?",
-    askAnythingElse: "Anything else?",
-    askName: "Name for the order? Please say just the name.",
-    retryName: "Sorry, just the name for the order.",
-    demoFinish: "For this demo I will finish the order here. Name for the order?",
+    askQty: `Got it. ${data.style} wings. How many would you like?`,
+    askSauce: "What sauce would you like on those?",
+    askSauceShort: "What sauce would you like?",
+    askDip: "Would you like a dip with that? Ranch, blue cheese, or no dip?",
+    askAnythingElse: "Anything else for you today?",
+    askName: "What name should I put on the order? Please say just the name.",
+    retryName: "Sorry about that. Please say just the name for the order.",
+    demoFinish: "For this demo, I will go ahead and finish the order here. What name should I put on the order?",
     closeNamed: `Perfect, ${data.name}. I have ${data.summary}. You are all set. Thanks for calling Flaps and Racks.`,
     closeGuest: `Perfect. I have ${data.summary}. You are all set. Thanks for calling Flaps and Racks.`,
     fallbackLanguage: "English or Spanish?",
-    fallbackDip: "Ranch, blue cheese, or no dip?",
+    fallbackDip: "Would you like ranch, blue cheese, or no dip?",
     fallbackAnythingElse: "Anything else?",
     goodbye: "Thanks for calling Flaps and Racks."
   };
@@ -390,11 +389,19 @@ function line(key, data = {}) {
   return lines[key];
 }
 
+// Uses the Twilio Console language mapping for en-US.
+// Set en-US to a Neural voice in Twilio Console first.
+function sayOptions() {
+  return {
+    language: "en-US"
+  };
+}
+
 function speak(res, message, action, callId, endCall = false) {
   const twiml = new twilio.twiml.VoiceResponse();
 
   if (endCall) {
-    twiml.say({ voice: "woman" }, message);
+    twiml.say(sayOptions(), message);
     twiml.hangup();
     res.type("text/xml");
     res.send(twiml.toString());
@@ -410,7 +417,7 @@ function speak(res, message, action, callId, endCall = false) {
     actionOnEmptyResult: true
   });
 
-  gather.say({ voice: "woman" }, message);
+  gather.say(sayOptions(), message);
 
   res.type("text/xml");
   res.send(twiml.toString());
@@ -635,12 +642,12 @@ app.post("/speech", (req, res) => {
   } catch (error) {
     console.error("/speech error:", error);
     const twiml = new twilio.twiml.VoiceResponse();
-    twiml.say({ voice: "woman" }, "We are sorry, an application error has occurred.");
+    twiml.say(sayOptions(), "We are sorry. An application error has occurred.");
     res.type("text/xml");
     res.send(twiml.toString());
   }
 });
 
 app.listen(PORT, () => {
-  console.log(`AI Cashier 1.3.1 Speed Pass listening on port ${PORT}`);
+  console.log(`AI Cashier 1.4 Human Voice Pass listening on port ${PORT}`);
 });
