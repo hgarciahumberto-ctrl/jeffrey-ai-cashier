@@ -17,6 +17,7 @@ function blankOrder() {
     style: null,
     sauce: null,
     dip: null,
+    mozzarellaSticks: false,
     name: null
   };
 }
@@ -85,7 +86,8 @@ function isNo(text) {
     t === "no" ||
     t === "nope" ||
     t === "nah" ||
-    t === "negative"
+    t === "negative" ||
+    t === "not today"
   );
 }
 
@@ -269,6 +271,22 @@ function detectDip(text) {
   return null;
 }
 
+function detectMozzarella(text) {
+  const t = normalize(text);
+
+  if (
+    t.includes("mozzarella sticks") ||
+    t.includes("mozarella sticks") ||
+    t.includes("mozzarella") ||
+    t.includes("mozarella") ||
+    t.includes("cheese sticks")
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
 function detectLikelyName(text) {
   const original = String(text || "").trim();
   const t = normalize(original);
@@ -293,7 +311,11 @@ function detectLikelyName(text) {
     "boneless",
     "yes",
     "yeah",
-    "yep"
+    "yep",
+    "mozzarella sticks",
+    "mozzarella",
+    "mozarella sticks",
+    "mozarella"
   ];
 
   if (blockedPhrases.includes(t)) return null;
@@ -322,7 +344,8 @@ function extractOrderFromSpeech(text) {
     quantity: detectQuantity(text),
     style: detectWingStyle(text),
     sauce: detectSauce(text),
-    dip: detectDip(text)
+    dip: detectDip(text),
+    mozzarellaSticks: detectMozzarella(text)
   };
 }
 
@@ -333,6 +356,7 @@ function updateOrderFromSpeech(order, text) {
   if (found.style && !order.style) order.style = found.style;
   if (found.sauce && !order.sauce) order.sauce = found.sauce;
   if (found.dip && !order.dip && found.dip !== "none") order.dip = found.dip;
+  if (found.mozzarellaSticks) order.mozzarellaSticks = true;
 
   return found;
 }
@@ -358,6 +382,10 @@ function buildOrderSummary(order) {
     parts.push(`and ${order.dip} on the side`);
   }
 
+  if (order.mozzarellaSticks) {
+    parts.push(`plus an order of mozzarella sticks`);
+  }
+
   return parts.join(" ");
 }
 
@@ -381,6 +409,8 @@ function line(key, data = {}) {
       "What sauce would you like? You can say buffalo mild, buffalo hot, lime pepper, garlic parmesan, barbecue, or plain.",
     askDip:
       "Would you like a dip with that? Ranch, blue cheese, or no dip?",
+    askMozzUpsell:
+      "Would you like to add an order of mozzarella sticks?",
     askAnythingElse:
       "Anything else for you today, or is that everything?",
     askName:
@@ -397,6 +427,8 @@ function line(key, data = {}) {
       "Would you like English or Spanish today?",
     fallbackDip:
       "Would you like ranch, blue cheese, or no dip?",
+    fallbackMozzUpsell:
+      "Would you like to add mozzarella sticks, yes or no?",
     fallbackAnythingElse:
       "Anything else for you today?",
     goodbye:
@@ -406,7 +438,6 @@ function line(key, data = {}) {
   return lines[key];
 }
 
-// Force Amazon Polly Matthew Neural directly
 function sayOptions() {
   return {
     voice: "Polly.Matthew-Neural",
@@ -480,12 +511,7 @@ app.post("/speech", (req, res) => {
         session.stage = "wings";
         resetRetry(session);
 
-        return speak(
-          res,
-          line("spanishDemo"),
-          "/speech",
-          callId
-        );
+        return speak(res, line("spanishDemo"), "/speech", callId);
       }
 
       if (isEnglish(text) || !speech) {
@@ -493,22 +519,12 @@ app.post("/speech", (req, res) => {
         session.stage = "wings";
         resetRetry(session);
 
-        return speak(
-          res,
-          line("askOrder"),
-          "/speech",
-          callId
-        );
+        return speak(res, line("askOrder"), "/speech", callId);
       }
 
       bumpRetry(session);
 
-      return speak(
-        res,
-        line("fallbackLanguage"),
-        "/speech",
-        callId
-      );
+      return speak(res, line("fallbackLanguage"), "/speech", callId);
     }
 
     if (session.stage === "wings") {
@@ -516,24 +532,14 @@ app.post("/speech", (req, res) => {
         session.stage = "dip";
         resetRetry(session);
 
-        return speak(
-          res,
-          line("askDip"),
-          "/speech",
-          callId
-        );
+        return speak(res, line("askDip"), "/speech", callId);
       }
 
       if (order.quantity && order.style) {
         session.stage = "sauce";
         resetRetry(session);
 
-        return speak(
-          res,
-          line("askSauce"),
-          "/speech",
-          callId
-        );
+        return speak(res, line("askSauce"), "/speech", callId);
       }
 
       if (order.quantity && !order.style) {
@@ -561,20 +567,10 @@ app.post("/speech", (req, res) => {
       bumpRetry(session);
 
       if (session.retries >= 2) {
-        return speak(
-          res,
-          line("askOrderExample"),
-          "/speech",
-          callId
-        );
+        return speak(res, line("askOrderExample"), "/speech", callId);
       }
 
-      return speak(
-        res,
-        line("askOrder"),
-        "/speech",
-        callId
-      );
+      return speak(res, line("askOrder"), "/speech", callId);
     }
 
     if (session.stage === "sauce") {
@@ -585,43 +581,23 @@ app.post("/speech", (req, res) => {
         session.stage = "dip";
         resetRetry(session);
 
-        return speak(
-          res,
-          line("askDip"),
-          "/speech",
-          callId
-        );
+        return speak(res, line("askDip"), "/speech", callId);
       }
 
       if (order.quantity && order.style && order.sauce) {
         session.stage = "dip";
         resetRetry(session);
 
-        return speak(
-          res,
-          line("askDip"),
-          "/speech",
-          callId
-        );
+        return speak(res, line("askDip"), "/speech", callId);
       }
 
       bumpRetry(session);
 
       if (session.retries >= 2) {
-        return speak(
-          res,
-          line("askSauceRetry"),
-          "/speech",
-          callId
-        );
+        return speak(res, line("askSauceRetry"), "/speech", callId);
       }
 
-      return speak(
-        res,
-        line("askSauce"),
-        "/speech",
-        callId
-      );
+      return speak(res, line("askSauce"), "/speech", callId);
     }
 
     if (session.stage === "dip") {
@@ -629,38 +605,52 @@ app.post("/speech", (req, res) => {
 
       if (dip) {
         order.dip = dip === "none" ? null : dip;
-        session.stage = "anything_else";
+        session.stage = "upsell_mozz";
         resetRetry(session);
 
-        return speak(
-          res,
-          line("askAnythingElse"),
-          "/speech",
-          callId
-        );
+        return speak(res, line("askMozzUpsell"), "/speech", callId);
       }
 
       if (isDone(text) || isNo(text)) {
         order.dip = null;
-        session.stage = "anything_else";
+        session.stage = "upsell_mozz";
         resetRetry(session);
 
-        return speak(
-          res,
-          line("askAnythingElse"),
-          "/speech",
-          callId
-        );
+        return speak(res, line("askMozzUpsell"), "/speech", callId);
       }
 
       bumpRetry(session);
 
-      return speak(
-        res,
-        line("fallbackDip"),
-        "/speech",
-        callId
-      );
+      return speak(res, line("fallbackDip"), "/speech", callId);
+    }
+
+    if (session.stage === "upsell_mozz") {
+      if (detectMozzarella(speech) || isYes(text)) {
+        order.mozzarellaSticks = true;
+        session.stage = "anything_else";
+        resetRetry(session);
+
+        return speak(res, line("askAnythingElse"), "/speech", callId);
+      }
+
+      if (isNo(text) || isDone(text)) {
+        order.mozzarellaSticks = false;
+        session.stage = "anything_else";
+        resetRetry(session);
+
+        return speak(res, line("askAnythingElse"), "/speech", callId);
+      }
+
+      bumpRetry(session);
+
+      if (order.mozzarellaSticks) {
+        session.stage = "anything_else";
+        resetRetry(session);
+
+        return speak(res, line("askAnythingElse"), "/speech", callId);
+      }
+
+      return speak(res, line("fallbackMozzUpsell"), "/speech", callId);
     }
 
     if (session.stage === "anything_else") {
@@ -668,34 +658,19 @@ app.post("/speech", (req, res) => {
         session.stage = "name";
         resetRetry(session);
 
-        return speak(
-          res,
-          line("askName"),
-          "/speech",
-          callId
-        );
+        return speak(res, line("askName"), "/speech", callId);
       }
 
       if (isYes(text) || text.length > 0) {
         session.stage = "name";
         resetRetry(session);
 
-        return speak(
-          res,
-          line("demoFinish"),
-          "/speech",
-          callId
-        );
+        return speak(res, line("demoFinish"), "/speech", callId);
       }
 
       bumpRetry(session);
 
-      return speak(
-        res,
-        line("fallbackAnythingElse"),
-        "/speech",
-        callId
-      );
+      return speak(res, line("fallbackAnythingElse"), "/speech", callId);
     }
 
     if (session.stage === "name") {
@@ -750,21 +725,10 @@ app.post("/speech", (req, res) => {
         );
       }
 
-      return speak(
-        res,
-        line("retryName"),
-        "/speech",
-        callId
-      );
+      return speak(res, line("retryName"), "/speech", callId);
     }
 
-    return speak(
-      res,
-      line("goodbye"),
-      "/speech",
-      callId,
-      true
-    );
+    return speak(res, line("goodbye"), "/speech", callId, true);
   } catch (error) {
     console.error("/speech error:", error);
     const twiml = new twilio.twiml.VoiceResponse();
@@ -775,5 +739,5 @@ app.post("/speech", (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`AI Cashier 1.4 Matthew Voice Pass listening on port ${PORT}`);
+  console.log(`AI Cashier 1.4 Mozzarella Upsell listening on port ${PORT}`);
 });
