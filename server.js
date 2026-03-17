@@ -87,7 +87,9 @@ function isNo(text) {
     t === "nope" ||
     t === "nah" ||
     t === "negative" ||
-    t === "not today"
+    t === "not today" ||
+    t.includes("no thanks") ||
+    t.includes("no thank you")
   );
 }
 
@@ -99,7 +101,9 @@ function isYes(text) {
     t === "yep" ||
     t === "sure" ||
     t === "correct" ||
-    t === "si"
+    t === "si" ||
+    t.includes("yes please") ||
+    t.includes("sounds good")
   );
 }
 
@@ -118,7 +122,8 @@ function isDone(text) {
     t.includes("no thats all") ||
     t.includes("eso es todo") ||
     t.includes("nada mas") ||
-    t.includes("nada más")
+    t.includes("nada más") ||
+    t.includes("that will be all")
   );
 }
 
@@ -379,7 +384,7 @@ function buildOrderSummary(order) {
   }
 
   if (order.dip) {
-    parts.push(`and ${order.dip} on the side`);
+    parts.push(`with ${order.dip} on the side`);
   }
 
   if (order.mozzarellaSticks) {
@@ -389,48 +394,124 @@ function buildOrderSummary(order) {
   return parts.join(" ");
 }
 
+function randomPick(options) {
+  return options[Math.floor(Math.random() * options.length)];
+}
+
 function line(key, data = {}) {
   const lines = {
-    welcome:
+    welcome: randomPick([
       "Thank you for calling Flaps and Racks. This is Jeffrey. Would you like English or Spanish today?",
-    spanishDemo:
+      "Thanks for calling Flaps and Racks. Jeffrey here. Would you like English or Spanish today?"
+    ]),
+
+    spanishDemo: randomPick([
       "Perfecto. For this demo, we will continue in English. What can I get started for you today?",
-    askOrder:
+      "Perfecto. For now, this demo will continue in English. What can I get started for you today?"
+    ]),
+
+    askOrder: randomPick([
       "What can I get started for you today?",
+      "What can I get for you today?",
+      "What would you like to order today?"
+    ]),
+
     askOrderExample:
       "You can say 12 traditional wings, or 12 boneless buffalo mild.",
-    askStyle:
+
+    askStyle: randomPick([
       `Got it. ${data.quantity} wings. Would you like traditional or boneless?`,
-    askQty:
+      `Sounds good. ${data.quantity} wings. Traditional or boneless?`
+    ]),
+
+    askQty: randomPick([
       `Got it. ${data.style} wings. How many would you like?`,
-    askSauce:
+      `Perfect. ${data.style} wings. How many can I get for you?`
+    ]),
+
+    askSauce: randomPick([
       "What sauce would you like on those?",
+      "What sauce would you like with those wings?",
+      "And what sauce would you like on those?"
+    ]),
+
     askSauceRetry:
       "What sauce would you like? You can say buffalo mild, buffalo hot, lime pepper, garlic parmesan, barbecue, or plain.",
-    askDip:
-      "Would you like a dip with that? Ranch, blue cheese, or no dip?",
-    askMozzUpsell:
+
+    askDip: randomPick([
+      "Would you like a dipping sauce with that? Ranch, blue cheese, or no dip?",
+      "Any dipping sauce with that? Ranch, blue cheese, or no dip?",
+      "Would you like ranch, blue cheese, or no dip with that?"
+    ]),
+
+    dipConfirmedRanch: randomPick([
+      "Perfect, ranch on the side.",
+      "Sounds good, ranch on the side."
+    ]),
+
+    dipConfirmedBlue: randomPick([
+      "Perfect, blue cheese on the side.",
+      "Sounds good, blue cheese on the side."
+    ]),
+
+    dipConfirmedNone: randomPick([
+      "No problem.",
+      "Got it."
+    ]),
+
+    askMozzUpsell: randomPick([
       "Would you like to add an order of mozzarella sticks?",
-    askAnythingElse:
+      "Would you like to add mozzarella sticks today?",
+      "Would you like an order of mozzarella sticks with that?"
+    ]),
+
+    mozzAccepted: randomPick([
+      "Great, I will add an order of mozzarella sticks.",
+      "Perfect, I will add mozzarella sticks."
+    ]),
+
+    mozzDeclined: randomPick([
+      "No problem.",
+      "Alright."
+    ]),
+
+    askAnythingElse: randomPick([
       "Anything else for you today, or is that everything?",
-    askName:
+      "Anything else for you today?",
+      "Can I get you anything else today?"
+    ]),
+
+    askName: randomPick([
       "Perfect. What name should I put on the order? Please say just the name.",
+      "Sounds good. What name should I put on the order? Please say just the name."
+    ]),
+
     retryName:
       "Sorry about that. Please say just the name for the order.",
-    demoFinish:
+
+    demoFinish: randomPick([
       "For this demo, I will go ahead and finish the order here. What name should I put on the order?",
+      "For this demo, I will go ahead and wrap this order up here. What name should I put on the order?"
+    ]),
+
     closeNamed:
       `Perfect, ${data.name}. I have ${data.summary}. Your order is all set. Thank you for calling Flaps and Racks.`,
+
     closeGuest:
       `Perfect. I have ${data.summary}. Your order is all set. Thank you for calling Flaps and Racks.`,
+
     fallbackLanguage:
       "Would you like English or Spanish today?",
+
     fallbackDip:
       "Would you like ranch, blue cheese, or no dip?",
+
     fallbackMozzUpsell:
       "Would you like to add mozzarella sticks, yes or no?",
+
     fallbackAnythingElse:
       "Anything else for you today?",
+
     goodbye:
       "Thank you for calling Flaps and Racks."
   };
@@ -486,7 +567,6 @@ app.get("/voice", (_req, res) => {
 app.post("/voice", (req, res) => {
   const callId = req.body.CallSid || `call-${Date.now()}`;
   resetSession(callId);
-
   return speak(res, line("welcome"), "/speech", callId);
 });
 
@@ -510,7 +590,6 @@ app.post("/speech", (req, res) => {
         session.language = "spanish";
         session.stage = "wings";
         resetRetry(session);
-
         return speak(res, line("spanishDemo"), "/speech", callId);
       }
 
@@ -518,12 +597,10 @@ app.post("/speech", (req, res) => {
         session.language = "english";
         session.stage = "wings";
         resetRetry(session);
-
         return speak(res, line("askOrder"), "/speech", callId);
       }
 
       bumpRetry(session);
-
       return speak(res, line("fallbackLanguage"), "/speech", callId);
     }
 
@@ -531,20 +608,17 @@ app.post("/speech", (req, res) => {
       if (order.quantity && order.style && order.sauce) {
         session.stage = "dip";
         resetRetry(session);
-
         return speak(res, line("askDip"), "/speech", callId);
       }
 
       if (order.quantity && order.style) {
         session.stage = "sauce";
         resetRetry(session);
-
         return speak(res, line("askSauce"), "/speech", callId);
       }
 
       if (order.quantity && !order.style) {
         resetRetry(session);
-
         return speak(
           res,
           line("askStyle", { quantity: order.quantity }),
@@ -555,7 +629,6 @@ app.post("/speech", (req, res) => {
 
       if (!order.quantity && order.style) {
         resetRetry(session);
-
         return speak(
           res,
           line("askQty", { style: order.style }),
@@ -580,14 +653,12 @@ app.post("/speech", (req, res) => {
         order.sauce = sauce;
         session.stage = "dip";
         resetRetry(session);
-
         return speak(res, line("askDip"), "/speech", callId);
       }
 
       if (order.quantity && order.style && order.sauce) {
         session.stage = "dip";
         resetRetry(session);
-
         return speak(res, line("askDip"), "/speech", callId);
       }
 
@@ -603,23 +674,87 @@ app.post("/speech", (req, res) => {
     if (session.stage === "dip") {
       const dip = detectDip(speech);
 
-      if (dip) {
-        order.dip = dip === "none" ? null : dip;
+      if (dip === "ranch") {
+        order.dip = "ranch";
         session.stage = "upsell_mozz";
         resetRetry(session);
 
-        return speak(res, line("askMozzUpsell"), "/speech", callId);
+        return speak(
+          res,
+          `${line("dipConfirmedRanch")} ${line("askMozzUpsell")}`,
+          "/speech",
+          callId
+        );
       }
 
-      if (isDone(text) || isNo(text)) {
+      if (dip === "blue cheese") {
+        order.dip = "blue cheese";
+        session.stage = "upsell_mozz";
+        resetRetry(session);
+
+        return speak(
+          res,
+          `${line("dipConfirmedBlue")} ${line("askMozzUpsell")}`,
+          "/speech",
+          callId
+        );
+      }
+
+      if (dip === "none") {
         order.dip = null;
         session.stage = "upsell_mozz";
         resetRetry(session);
 
-        return speak(res, line("askMozzUpsell"), "/speech", callId);
+        return speak(
+          res,
+          `${line("dipConfirmedNone")} ${line("askMozzUpsell")}`,
+          "/speech",
+          callId
+        );
+      }
+
+      // Friendly fallback: yes = default ranch
+      if (isYes(text)) {
+        order.dip = "ranch";
+        session.stage = "upsell_mozz";
+        resetRetry(session);
+
+        return speak(
+          res,
+          `${line("dipConfirmedRanch")} ${line("askMozzUpsell")}`,
+          "/speech",
+          callId
+        );
+      }
+
+      if (isNo(text) || isDone(text)) {
+        order.dip = null;
+        session.stage = "upsell_mozz";
+        resetRetry(session);
+
+        return speak(
+          res,
+          `${line("dipConfirmedNone")} ${line("askMozzUpsell")}`,
+          "/speech",
+          callId
+        );
       }
 
       bumpRetry(session);
+
+      // Prevent getting stuck here
+      if (session.retries >= 2) {
+        order.dip = null;
+        session.stage = "upsell_mozz";
+        resetRetry(session);
+
+        return speak(
+          res,
+          `${line("dipConfirmedNone")} ${line("askMozzUpsell")}`,
+          "/speech",
+          callId
+        );
+      }
 
       return speak(res, line("fallbackDip"), "/speech", callId);
     }
@@ -630,7 +765,12 @@ app.post("/speech", (req, res) => {
         session.stage = "anything_else";
         resetRetry(session);
 
-        return speak(res, line("askAnythingElse"), "/speech", callId);
+        return speak(
+          res,
+          `${line("mozzAccepted")} ${line("askAnythingElse")}`,
+          "/speech",
+          callId
+        );
       }
 
       if (isNo(text) || isDone(text)) {
@@ -638,7 +778,12 @@ app.post("/speech", (req, res) => {
         session.stage = "anything_else";
         resetRetry(session);
 
-        return speak(res, line("askAnythingElse"), "/speech", callId);
+        return speak(
+          res,
+          `${line("mozzDeclined")} ${line("askAnythingElse")}`,
+          "/speech",
+          callId
+        );
       }
 
       bumpRetry(session);
@@ -646,8 +791,20 @@ app.post("/speech", (req, res) => {
       if (order.mozzarellaSticks) {
         session.stage = "anything_else";
         resetRetry(session);
-
         return speak(res, line("askAnythingElse"), "/speech", callId);
+      }
+
+      if (session.retries >= 2) {
+        order.mozzarellaSticks = false;
+        session.stage = "anything_else";
+        resetRetry(session);
+
+        return speak(
+          res,
+          `${line("mozzDeclined")} ${line("askAnythingElse")}`,
+          "/speech",
+          callId
+        );
       }
 
       return speak(res, line("fallbackMozzUpsell"), "/speech", callId);
@@ -657,19 +814,17 @@ app.post("/speech", (req, res) => {
       if (isDone(text) || isNo(text)) {
         session.stage = "name";
         resetRetry(session);
-
         return speak(res, line("askName"), "/speech", callId);
       }
 
+      // Demo stays guided, but sounds open
       if (isYes(text) || text.length > 0) {
         session.stage = "name";
         resetRetry(session);
-
         return speak(res, line("demoFinish"), "/speech", callId);
       }
 
       bumpRetry(session);
-
       return speak(res, line("fallbackAnythingElse"), "/speech", callId);
     }
 
@@ -739,5 +894,5 @@ app.post("/speech", (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`AI Cashier 1.4 Mozzarella Upsell listening on port ${PORT}`);
+  console.log("AI Cashier 1.5 Friendly Demo listening on port " + PORT);
 });
