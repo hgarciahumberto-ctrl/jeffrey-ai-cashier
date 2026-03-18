@@ -11,12 +11,23 @@ app.use(bodyParser.json());
 const PORT = process.env.PORT || 3000;
 
 // ------------------------
+// Crash logging
+// ------------------------
+process.on("uncaughtException", (err) => {
+  console.error("UNCAUGHT EXCEPTION:", err);
+});
+
+process.on("unhandledRejection", (err) => {
+  console.error("UNHANDLED REJECTION:", err);
+});
+
+// ------------------------
 // In-memory sessions
 // ------------------------
 const sessions = new Map();
 
 // ------------------------
-// Menu data from Flaps & Racks board
+// Menu data
 // ------------------------
 const VALID_WING_COUNTS = [6, 9, 12, 18, 24, 48];
 
@@ -28,7 +39,7 @@ const SAUCE_ALIASES = {
   "chocolate chiltepin": ["chocolate chiltepin"],
   "cinnamon roll": ["cinnamon roll"],
   "citrus chipotle": ["citrus chipotle"],
-  "garlic parmesan": ["garlic parmesan", "garlic parm", "garlic parmeasan", "garlic parmesean"],
+  "garlic parmesan": ["garlic parmesan", "garlic parm", "garlic parmesean", "garlic parmeasan"],
   "green chile": ["green chile", "green chili"],
   "hot": ["hot", "buffalo hot"],
   "lime pepper": ["lime pepper", "lemon pepper"],
@@ -92,29 +103,27 @@ const FRIENDLY_OPENERS = [
   "Got it.",
   "Perfect.",
   "Sounds good.",
-  "Sure thing.",
+  "Sure.",
   "Alright."
 ];
 
-const ANYTHING_ELSE_LINES = [
+const ADD_ON_PROMPTS = [
+  "Want to add fries, corn ribs, mozzarella sticks, or a dipping sauce?",
+  "Would you like fries, corn ribs, mac bites, or maybe a ranch with that?",
+  "Do you want to add a side or dipping sauce with that?"
+];
+
+const ANYTHING_ELSE_PROMPTS = [
   "Anything else for you today?",
-  "Want to add fries or corn ribs with that?",
-  "Mozzarella sticks and mac bites are really popular, want to add one?",
-  "Can I get you a side to go with that?"
+  "Want to add anything else?",
+  "Can I get you anything else?"
 ];
 
 const POPULAR_SAUCES = ["mild", "lime pepper", "garlic parmesan", "mango habanero"];
 
 // ------------------------
-// Helpers
+// Session helpers
 // ------------------------
-function getSession(callSid) {
-  if (!sessions.has(callSid)) {
-    sessions.set(callSid, buildFreshSession());
-  }
-  return sessions.get(callSid);
-}
-
 function buildFreshSession() {
   return {
     stage: "language",
@@ -133,6 +142,13 @@ function buildFreshSession() {
   };
 }
 
+function getSession(callSid) {
+  if (!sessions.has(callSid)) {
+    sessions.set(callSid, buildFreshSession());
+  }
+  return sessions.get(callSid);
+}
+
 function resetForNewCall(session) {
   const fresh = buildFreshSession();
   session.stage = fresh.stage;
@@ -140,6 +156,9 @@ function resetForNewCall(session) {
   session.order = fresh.order;
 }
 
+// ------------------------
+// Text helpers
+// ------------------------
 function normalizeText(text = "") {
   return text
     .toLowerCase()
@@ -150,60 +169,6 @@ function normalizeText(text = "") {
 
 function pick(arr) {
   return arr[Math.floor(Math.random() * arr.length)];
-}
-
-function speak(res, message, action = "/speech", callSid = "", hangup = false) {
-  const vr = new VoiceResponse();
-
-  if (hangup) {
-    vr.say({ voice: "alice" }, message);
-    vr.hangup();
-    return res.type("text/xml").send(vr.toString());
-  }
-
-  const gather = vr.gather({
-    input: "speech",
-    action,
-    method: "POST",
-    speechTimeout: "auto",
-    timeout: 4,
-    enhanced: true
-  });
-
-  gather.say({ voice: "alice" }, message);
-
-  return res.type("text/xml").send(vr.toString());
-}
-
-function isYes(text) {
-  const t = normalizeText(text);
-  return [
-    "yes",
-    "yeah",
-    "yep",
-    "sure",
-    "okay",
-    "ok",
-    "correct"
-  ].includes(t);
-}
-
-function isNo(text) {
-  const t = normalizeText(text);
-  return [
-    "no",
-    "nope",
-    "that's all",
-    "that is all",
-    "nothing else",
-    "done",
-    "no that's it",
-    "no that is it"
-  ].includes(t);
-}
-
-function isDone(text) {
-  return isNo(text);
 }
 
 function wordToNumber(word) {
@@ -265,6 +230,14 @@ function extractSide(text) {
   return matchAlias(text, SIDE_ALIASES);
 }
 
+function extractSauces(text) {
+  return extractAllMatches(text, SAUCE_ALIASES);
+}
+
+function isValidWingQuantity(quantity) {
+  return VALID_WING_COUNTS.includes(quantity);
+}
+
 function extractDipQuantity(text) {
   const t = normalizeText(text);
 
@@ -275,9 +248,7 @@ function extractDipQuantity(text) {
 
   for (const pattern of patterns) {
     const m = t.match(pattern);
-    if (m) {
-      return wordToNumber(m[1]);
-    }
+    if (m) return wordToNumber(m[1]);
   }
 
   if (extractDip(text)) return 1;
@@ -298,23 +269,65 @@ function extractName(text) {
   for (const pattern of patterns) {
     const m = raw.match(pattern);
     if (m && m[1]) {
-      return m[1]
-        .trim()
-        .replace(/\b\w/g, c => c.toUpperCase());
+      return m[1].trim().replace(/\b\w/g, c => c.toUpperCase());
     }
   }
 
   return null;
 }
 
-function extractSauces(text) {
-  return extractAllMatches(text, SAUCE_ALIASES);
+function isYes(text) {
+  const t = normalizeText(text);
+  return ["yes", "yeah", "yep", "sure", "okay", "ok", "correct"].includes(t);
 }
 
-function isValidWingQuantity(quantity) {
-  return VALID_WING_COUNTS.includes(quantity);
+function isNo(text) {
+  const t = normalizeText(text);
+  return [
+    "no",
+    "nope",
+    "that's all",
+    "that is all",
+    "nothing else",
+    "done",
+    "no that's it",
+    "no that is it"
+  ].includes(t);
 }
 
+function isDone(text) {
+  return isNo(text);
+}
+
+function looksLikeCorrection(text) {
+  const t = normalizeText(text);
+  return (
+    t.includes("actually") ||
+    t.includes("change") ||
+    t.includes("make that") ||
+    t.includes("instead") ||
+    t.includes("switch it") ||
+    t.includes("no make it")
+  );
+}
+
+function looksLikeWingsIntent(text) {
+  const t = normalizeText(text);
+  return (
+    t.includes("wings") ||
+    t.includes("bone in") ||
+    t.includes("bone-in") ||
+    t.includes("traditional") ||
+    t.includes("boneless") ||
+    extractFirstNumber(t) != null ||
+    extractStyle(t) != null ||
+    extractSauces(t).length > 0
+  );
+}
+
+// ------------------------
+// Order parsing
+// ------------------------
 function parseOrderFromSpeech(text) {
   const t = normalizeText(text);
 
@@ -375,7 +388,6 @@ function dipText(order) {
   if (!order.dip) return null;
 
   const qty = order.dipQty || 1;
-
   if (qty === 1) return order.dip;
   if (order.dip === "ranch") return `${qty} ranches`;
 
@@ -417,6 +429,10 @@ function hasCompleteMainWingOrder(order) {
   return !!(order.quantity && order.style && order.sauce);
 }
 
+function popularSauceLine() {
+  return `${POPULAR_SAUCES.slice(0, 3).join(", ")}, and ${POPULAR_SAUCES[3]} are popular.`;
+}
+
 function nextMissingQuestion(order) {
   if (!order.quantity && !order.style) {
     return "How many wings would you like, and would you like traditional or boneless?";
@@ -431,36 +447,35 @@ function nextMissingQuestion(order) {
   }
 
   if (!order.sauce) {
-    return "What sauce would you like? Mild, lime pepper, garlic parmesan, and mango habanero are popular.";
+    return `What sauce would you like? ${popularSauceLine()}`;
   }
 
   return null;
 }
 
-function looksLikeCorrection(text) {
-  const t = normalizeText(text);
-  return (
-    t.includes("actually") ||
-    t.includes("change") ||
-    t.includes("make that") ||
-    t.includes("instead") ||
-    t.includes("no make it") ||
-    t.includes("switch it")
-  );
-}
+// ------------------------
+// Twilio speech
+// ------------------------
+function speak(res, message, action = "/speech", hangup = false) {
+  const vr = new VoiceResponse();
 
-function looksLikeWingsIntent(text) {
-  const t = normalizeText(text);
-  return (
-    t.includes("wings") ||
-    t.includes("bone in") ||
-    t.includes("bone-in") ||
-    t.includes("traditional") ||
-    t.includes("boneless") ||
-    extractFirstNumber(t) != null ||
-    extractStyle(t) != null ||
-    extractSauces(t).length > 0
-  );
+  if (hangup) {
+    vr.say({ voice: "Polly.Matthew" }, message);
+    vr.hangup();
+    return res.type("text/xml").send(vr.toString());
+  }
+
+  const gather = vr.gather({
+    input: "speech",
+    action,
+    method: "POST",
+    speechTimeout: "auto",
+    timeout: 4,
+    enhanced: true
+  });
+
+  gather.say({ voice: "Polly.Matthew" }, message);
+  return res.type("text/xml").send(vr.toString());
 }
 
 // ------------------------
@@ -473,9 +488,7 @@ app.post("/voice", (req, res) => {
 
   return speak(
     res,
-    "Thank you for calling Flaps and Racks, this is Jeffrey. Would you like to order in English or Spanish?",
-    "/speech",
-    callSid
+    "Thank you for calling Flaps and Racks, this is Jeffrey. Would you like to order in English or Spanish?"
   );
 });
 
@@ -484,6 +497,8 @@ app.post("/speech", (req, res) => {
   const speech = req.body.SpeechResult || "";
   const text = normalizeText(speech);
   const session = getSession(callSid);
+
+  console.log("CALL:", callSid, "STAGE:", session.stage, "SPEECH:", speech);
 
   // ------------------------
   // LANGUAGE
@@ -494,9 +509,7 @@ app.post("/speech", (req, res) => {
       session.stage = "order";
       return speak(
         res,
-        "Gracias por llamar a Flaps and Racks. Por ahora esta demo funciona mejor en inglés. If that's okay, what can I get started for you?",
-        "/speech",
-        callSid
+        "Gracias por llamar a Flaps and Racks. Por ahora esta demo funciona mejor en inglés. If that's okay, what can I get started for you?"
       );
     }
 
@@ -504,52 +517,43 @@ app.post("/speech", (req, res) => {
     session.stage = "order";
     return speak(
       res,
-      "Great. What can I get started for you today?",
-      "/speech",
-      callSid
+      "Great. What can I get started for you today?"
     );
   }
 
   // ------------------------
-  // ORDER
+  // MAIN ORDER
   // ------------------------
   if (session.stage === "order") {
     const parsed = parseOrderFromSpeech(speech);
     mergeOrder(session.order, parsed);
 
     const missingQuestion = nextMissingQuestion(session.order);
-
     if (missingQuestion) {
       return speak(
         res,
-        `${pick(FRIENDLY_OPENERS)} ${missingQuestion}`,
-        "/speech",
-        callSid
+        `${pick(FRIENDLY_OPENERS)} ${missingQuestion}`
       );
     }
 
-    session.stage = "dip_or_more";
-
+    session.stage = "extras";
     const summary = buildOrderSummary(session.order);
+
     return speak(
       res,
-      `${pick(FRIENDLY_OPENERS)} I have ${summary}. Would you like to add fries, corn ribs, mozzarella sticks, or maybe a dipping sauce?`,
-      "/speech",
-      callSid
+      `${pick(FRIENDLY_OPENERS)} I have ${summary}. ${pick(ADD_ON_PROMPTS)}`
     );
   }
 
   // ------------------------
-  // DIP / SIDE / ANYTHING ELSE
+  // EXTRAS / CORRECTIONS
   // ------------------------
-  if (session.stage === "dip_or_more") {
+  if (session.stage === "extras") {
     if (isDone(speech) || isNo(speech)) {
       session.stage = "name";
       return speak(
         res,
-        "Perfect. Can I get a name for the order?",
-        "/speech",
-        callSid
+        "Perfect. Can I get a name for the order?"
       );
     }
 
@@ -557,13 +561,19 @@ app.post("/speech", (req, res) => {
 
     if (looksLikeCorrection(speech)) {
       mergeOrder(session.order, parsed);
-      const summary = buildOrderSummary(session.order);
+      const missingQuestion = nextMissingQuestion(session.order);
 
+      if (missingQuestion) {
+        return speak(
+          res,
+          `No problem. ${missingQuestion}`
+        );
+      }
+
+      const summary = buildOrderSummary(session.order);
       return speak(
         res,
-        `No problem. I updated it to ${summary}. ${pick(ANYTHING_ELSE_LINES)}`,
-        "/speech",
-        callSid
+        `Got it. I updated that to ${summary}. ${pick(ANYTHING_ELSE_PROMPTS)}`
       );
     }
 
@@ -573,39 +583,31 @@ app.post("/speech", (req, res) => {
 
       return speak(
         res,
-        `${pick(FRIENDLY_OPENERS)} Now I have ${summary}. ${pick(ANYTHING_ELSE_LINES)}`,
-        "/speech",
-        callSid
+        `${pick(FRIENDLY_OPENERS)} Now I have ${summary}. ${pick(ANYTHING_ELSE_PROMPTS)}`
       );
     }
 
     if (looksLikeWingsIntent(speech)) {
       mergeOrder(session.order, parsed);
+      const missingQuestion = nextMissingQuestion(session.order);
 
-      if (!hasCompleteMainWingOrder(session.order)) {
-        const missingQuestion = nextMissingQuestion(session.order);
+      if (missingQuestion) {
         return speak(
           res,
-          `${pick(FRIENDLY_OPENERS)} ${missingQuestion}`,
-          "/speech",
-          callSid
+          `${pick(FRIENDLY_OPENERS)} ${missingQuestion}`
         );
       }
 
       const summary = buildOrderSummary(session.order);
       return speak(
         res,
-        `${pick(FRIENDLY_OPENERS)} Now I have ${summary}. ${pick(ANYTHING_ELSE_LINES)}`,
-        "/speech",
-        callSid
+        `${pick(FRIENDLY_OPENERS)} Now I have ${summary}. ${pick(ANYTHING_ELSE_PROMPTS)}`
       );
     }
 
     return speak(
       res,
-      "I got most of the order, but I missed that last part. You can add a dipping sauce, fries, corn ribs, mozzarella sticks, or say that's all.",
-      "/speech",
-      callSid
+      "I missed that last part. You can add a ranch, blue cheese, fries, corn ribs, mozzarella sticks, or say that's all."
     );
   }
 
@@ -620,32 +622,23 @@ app.post("/speech", (req, res) => {
       session.stage = "done";
 
       const summary = buildOrderSummary(session.order);
-
       return speak(
         res,
-        `Perfect, ${session.order.name}. I have ${summary}. Your order is all set. Thank you for calling Flaps and Racks.`,
+        `Perfect, ${name}. I have ${summary}. Your order is all set. Thank you for calling Flaps and Racks.`,
         "/speech",
-        callSid,
         true
       );
     }
 
     return speak(
       res,
-      "Sorry, I missed the name. Can I get the name for the order one more time?",
-      "/speech",
-      callSid
+      "Sorry, I missed the name. Can I get the name for the order one more time?"
     );
   }
 
-  // ------------------------
-  // FALLBACK
-  // ------------------------
   return speak(
     res,
-    "Sorry, something got off track. Let's start again. What can I get started for you today?",
-    "/speech",
-    callSid
+    "Sorry, something got off track. Let's start again. What can I get started for you today?"
   );
 });
 
@@ -653,7 +646,7 @@ app.post("/speech", (req, res) => {
 // Health check
 // ------------------------
 app.get("/", (req, res) => {
-  res.send("Jeffrey AI Cashier 1.4.1 menu version is running.");
+  res.send("Jeffrey AI Cashier 1.4.1 human menu version is running.");
 });
 
 app.listen(PORT, () => {
