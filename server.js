@@ -9,16 +9,13 @@ app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json());
 
 const PORT = process.env.PORT || 3000;
+const VOICE = "Polly.Matthew";
 
 // =====================================================
-// CONFIG
+// MENU / CONFIG
 // =====================================================
-const VOICE = "Polly.Matthew";
 const VALID_WING_COUNTS = [6, 9, 12, 18, 24, 48];
 
-// =====================================================
-// MENU
-// =====================================================
 const SAUCE_ALIASES = [
   { keys: ["mild", "buffalo mild"], value: "mild" },
   { keys: ["hot", "buffalo hot"], value: "hot" },
@@ -35,19 +32,19 @@ const SAUCE_ALIASES = [
   { keys: ["cinnamon roll"], value: "cinnamon roll" }
 ];
 
-const EXTRA_SIDE_ALIASES = [
-  { keys: ["corn ribs", "corn"], value: "corn ribs" },
-  { keys: ["mac bites", "mac bite", "mac", "mac and cheese bites"], value: "mac bites" },
-  { keys: ["mozzarella sticks", "mozz sticks", "mozzarella", "mozz"], value: "mozzarella sticks" },
-  { keys: ["fries", "regular fries", "french fries"], value: "regular fries" },
-  { keys: ["sweet potato fries", "sweet fries"], value: "sweet potato fries" },
-  { keys: ["potato salad"], value: "potato salad" }
-];
-
 const COMBO_SIDE_ALIASES = [
   { keys: ["regular fries", "fries", "french fries"], value: "regular fries" },
   { keys: ["sweet potato fries", "sweet fries"], value: "sweet potato fries" },
   { keys: ["potato salad"], value: "potato salad" }
+];
+
+const EXTRA_SIDE_ALIASES = [
+  { keys: ["fries", "regular fries", "french fries"], value: "regular fries" },
+  { keys: ["sweet potato fries", "sweet fries"], value: "sweet potato fries" },
+  { keys: ["potato salad"], value: "potato salad" },
+  { keys: ["corn ribs", "corn"], value: "corn ribs" },
+  { keys: ["mac bites", "mac bite", "mac", "mac and cheese bites"], value: "mac bites" },
+  { keys: ["mozzarella sticks", "mozz sticks", "mozzarella", "mozz"], value: "mozzarella sticks" }
 ];
 
 const DIP_ALIASES = [
@@ -55,34 +52,22 @@ const DIP_ALIASES = [
   { keys: ["blue cheese", "bleu cheese"], value: "blue cheese" }
 ];
 
-const DRINK_ALIASES = [
-  { keys: ["coke", "coca cola"], value: "coke" },
-  { keys: ["diet coke"], value: "diet coke" },
-  { keys: ["sprite"], value: "sprite" },
-  { keys: ["dr pepper", "doctor pepper"], value: "dr pepper" },
-  { keys: ["root beer"], value: "root beer" },
-  { keys: ["lemonade"], value: "lemonade" },
-  { keys: ["iced tea", "tea"], value: "iced tea" },
-  { keys: ["water"], value: "water" }
-];
-
 // =====================================================
-// SESSIONS
+// SESSION
 // =====================================================
 const sessions = new Map();
 
 function blankOrder() {
   return {
     quantity: null,
-    style: null,
-    sauce: null,
-    dips: [],
-    extraSide: null,
-    name: null,
+    style: null, // classic | boneless
+    sauces: [],
+    includedDips: [],
+    extraDips: [],
     isCombo: null,
     comboSide: null,
-    comboDrink: null,
-    itemType: "wings"
+    extraSide: null,
+    name: null
   };
 }
 
@@ -91,7 +76,6 @@ function getSession(callSid) {
     sessions.set(callSid, {
       stage: "language",
       lastPrompt: "",
-      lastStage: "language",
       hold: false,
       order: blankOrder()
     });
@@ -102,7 +86,6 @@ function getSession(callSid) {
 function resetSession(session) {
   session.stage = "language";
   session.lastPrompt = "";
-  session.lastStage = "language";
   session.hold = false;
   session.order = blankOrder();
 }
@@ -132,7 +115,6 @@ function speak(res, message, hangup = false) {
       speechTimeout: "auto",
       timeout: 5
     });
-
     gather.say({ voice: VOICE }, message);
   }
 
@@ -141,7 +123,6 @@ function speak(res, message, hangup = false) {
 
 function sayAndStore(session, res, message, hangup = false) {
   session.lastPrompt = message;
-  session.lastStage = session.stage;
   return speak(res, message, hangup);
 }
 
@@ -161,14 +142,28 @@ function extractNumber(text) {
 
 function extractStyle(text) {
   if (text.includes("boneless")) return "boneless";
-  if (text.includes("traditional") || text.includes("bone in") || text.includes("bone-in") || text.includes("bone")) {
-    return "traditional";
+  if (
+    text.includes("classic") ||
+    text.includes("traditional") ||
+    text.includes("bone in") ||
+    text.includes("bone-in") ||
+    text.includes("bone")
+  ) {
+    return "classic";
   }
   return null;
 }
 
-function extractSauce(text) {
-  return findAlias(text, SAUCE_ALIASES);
+function extractSauces(text) {
+  const found = [];
+  for (const item of SAUCE_ALIASES) {
+    for (const key of item.keys) {
+      if (text.includes(key)) {
+        if (!found.includes(item.value)) found.push(item.value);
+      }
+    }
+  }
+  return found;
 }
 
 function extractComboSide(text) {
@@ -177,10 +172,6 @@ function extractComboSide(text) {
 
 function extractExtraSide(text) {
   return findAlias(text, EXTRA_SIDE_ALIASES);
-}
-
-function extractDrink(text) {
-  return findAlias(text, DRINK_ALIASES);
 }
 
 function extractDip(text) {
@@ -224,11 +215,11 @@ function formatName(name) {
 }
 
 function isYes(text) {
-  return /\b(yes|yeah|yep|sure|okay|ok|sounds good|make it a combo|combo)\b/.test(text);
+  return /\b(yes|yeah|yep|sure|okay|ok|sounds good|combo|make it a combo)\b/.test(text);
 }
 
 function isNo(text) {
-  return /\b(no|nope|nah|that s all|thats all|nothing else|no thank you|i m good|im good|just that)\b/.test(text);
+  return /\b(no|nope|nah|nothing else|that s all|thats all|no thank you|im good|i m good|just that)\b/.test(text);
 }
 
 function wantsCombo(text) {
@@ -244,7 +235,7 @@ function wantsHold(text) {
 }
 
 function wantsResume(text) {
-  return /\b(okay|ok|ready|go ahead|continue|i m ready|im ready)\b/.test(text);
+  return /\b(ready|go ahead|continue|okay|ok|i m ready|im ready)\b/.test(text);
 }
 
 function wantsStartOver(text) {
@@ -255,79 +246,113 @@ function wantsChangeSauce(text) {
   return /\b(change the sauce|different sauce|switch the sauce|another sauce)\b/.test(text);
 }
 
-function wantsGoBack(text) {
-  return /\b(go back|back up|previous)\b/.test(text);
+function saucesAllowed(quantity) {
+  return Math.max(1, Math.floor(quantity / 6));
 }
 
-function summarizeDips(dips = []) {
-  if (!dips.length) return "";
-  return dips
-    .map(d => `${d.qty} ${d.type}${d.qty > 1 ? (d.type === "ranch" ? "es" : "") : ""}`)
+function dipsIncluded(quantity) {
+  return Math.max(1, Math.floor(quantity / 6));
+}
+
+function dipCountByType(list) {
+  const counts = {};
+  for (const item of list) {
+    counts[item] = (counts[item] || 0) + 1;
+  }
+  return counts;
+}
+
+function dipSummary(list) {
+  if (!list.length) return "";
+  const counts = dipCountByType(list);
+  return Object.entries(counts)
+    .map(([type, qty]) => `${qty} ${type}${qty > 1 ? (type === "ranch" ? "es" : "") : ""}`)
+    .join(", ");
+}
+
+function sauceSummary(list) {
+  if (!list.length) return "";
+  const counts = {};
+  for (const sauce of list) counts[sauce] = (counts[sauce] || 0) + 1;
+
+  return Object.entries(counts)
+    .map(([sauce, qty]) => qty > 1 ? `${qty} ${sauce}` : sauce)
     .join(", ");
 }
 
 function orderSummary(order) {
-  let base = `${order.quantity} ${order.style} wings with ${order.sauce}`;
+  let base = `${order.quantity} ${order.style} wings with ${sauceSummary(order.sauces)}`;
 
   if (order.isCombo) {
-    base += " as a combo";
-    if (order.comboSide) base += `, with ${order.comboSide}`;
-    if (order.comboDrink) base += `, and ${order.comboDrink} to drink`;
+    base += ` as a combo with ${order.comboSide}`;
   }
 
-  if (order.dips.length) {
-    base += `, with ${summarizeDips(order.dips)}`;
+  if (order.includedDips.length) {
+    base += `, with included ${dipSummary(order.includedDips)}`;
+  }
+
+  if (order.extraDips.length) {
+    base += `, plus extra ${dipSummary(order.extraDips)}`;
   }
 
   if (order.extraSide) {
-    base += `, plus ${order.extraSide}`;
+    base += `, and ${order.extraSide}`;
   }
 
   return base;
 }
 
-function addDip(order, type, qty = 1) {
-  const existing = order.dips.find(d => d.type === type);
-  if (existing) {
-    existing.qty += qty;
-  } else {
-    order.dips.push({ type, qty });
-  }
-}
-
-function parseOrderFromSpeech(text, order) {
+function parseCoreOrder(text, order) {
   const quantity = extractNumber(text);
   const style = extractStyle(text);
-  const sauce = extractSauce(text);
+  const sauces = extractSauces(text);
   const comboSide = extractComboSide(text);
-  const drink = extractDrink(text);
-  const dip = extractDip(text);
 
   if (quantity) order.quantity = quantity;
   if (style) order.style = style;
-  if (sauce) order.sauce = sauce;
+  if (sauces.length) order.sauces = sauces;
   if (comboSide) order.comboSide = comboSide;
-  if (drink) order.comboDrink = drink;
   if (wantsCombo(text)) order.isCombo = true;
-
-  if (dip) {
-    addDip(order, dip, extractDipQty(text));
-  }
 }
 
 function missingCore(order) {
   if (!order.quantity) return "quantity";
   if (!order.style) return "style";
-  if (!order.sauce) return "sauce";
+  if (!order.sauces.length) return "sauce";
   return null;
 }
 
 function nextPromptForMissing(order) {
   const missing = missingCore(order);
   if (missing === "quantity") return "How many wings would you like? We have 6, 9, 12, 18, 24, or 48.";
-  if (missing === "style") return "You want those traditional or boneless?";
-  if (missing === "sauce") return "What sauce would you like? Mild, lime pepper, and garlic parmesan are popular.";
+  if (missing === "style") return "Would you like classic or boneless?";
+  if (missing === "sauce") return "What sauce would you like?";
   return null;
+}
+
+function sauceSlotsSatisfied(order) {
+  if (!order.quantity) return false;
+  return order.sauces.length >= saucesAllowed(order.quantity);
+}
+
+function includedDipsSatisfied(order) {
+  if (!order.quantity) return false;
+  return order.includedDips.length >= dipsIncluded(order.quantity);
+}
+
+function addIncludedDip(order, dipType, qty = 1) {
+  const limit = dipsIncluded(order.quantity);
+  for (let i = 0; i < qty; i++) {
+    if (order.includedDips.length < limit) {
+      order.includedDips.push(dipType);
+    }
+  }
+}
+
+function addExtraDip(order, dipType, qty = 1) {
+  for (let i = 0; i < qty; i++) {
+    order.extraDips.push(dipType);
+  }
 }
 
 // =====================================================
@@ -358,23 +383,9 @@ function handleInterruptions(session, speech, res) {
   }
 
   if (wantsChangeSauce(speech)) {
-    session.order.sauce = null;
-    session.stage = "order";
-    return sayAndStore(session, res, "Absolutely. What sauce would you like instead?");
-  }
-
-  if (wantsGoBack(speech)) {
-    if (session.stage === "combo_drink") {
-      session.stage = "combo_side";
-      return sayAndStore(session, res, "No problem. For the combo, would you like regular fries, sweet potato fries, or potato salad?");
-    }
-
-    if (session.stage === "name") {
-      session.stage = "upsell";
-      return sayAndStore(session, res, "Sure. Would you like to add fries, corn ribs, mac bites, mozzarella sticks, or just keep it as is?");
-    }
-
-    return sayAndStore(session, res, "Sure. Tell me what you'd like to change.");
+    session.order.sauces = [];
+    session.stage = "sauce";
+    return sayAndStore(session, res, "Absolutely. What sauce would you like?");
   }
 
   return null;
@@ -385,12 +396,9 @@ function handleInterruptions(session, speech, res) {
 // =====================================================
 app.post("/voice", (req, res) => {
   const session = getSession(req.body.CallSid);
+  resetSession(session);
   session.stage = "language";
-  session.lastStage = "language";
   session.lastPrompt = "Thank you for calling Flaps and Racks. English or Spanish?";
-  session.hold = false;
-  session.order = blankOrder();
-
   return speak(res, "Thank you for calling Flaps and Racks. English or Spanish?");
 });
 
@@ -402,38 +410,45 @@ app.post("/speech", (req, res) => {
   console.log("Stage:", session.stage, "| Speech:", speech);
   console.log("Order:", JSON.stringify(session.order));
 
-  const interruptionResponse = handleInterruptions(session, speech, res);
-  if (interruptionResponse) return interruptionResponse;
+  const interrupt = handleInterruptions(session, speech, res);
+  if (interrupt) return interrupt;
 
+  // LANGUAGE
   if (session.stage === "language") {
     session.stage = "order";
     return sayAndStore(session, res, "What can I get started for you today?");
   }
 
+  // ORDER
   if (session.stage === "order") {
-    parseOrderFromSpeech(speech, session.order);
+    parseCoreOrder(speech, session.order);
 
     const missing = missingCore(session.order);
     if (missing) {
+      if (missing === "sauce") {
+        session.stage = "sauce";
+      }
       return sayAndStore(session, res, nextPromptForMissing(session.order));
     }
 
-    if (session.order.isCombo === true) {
-      if (session.order.comboSide && session.order.comboDrink) {
-        session.stage = "dip";
-        return sayAndStore(
-          session,
-          res,
-          `Perfect. I have ${orderSummary(session.order)}. Would you like any dipping sauce?`
-        );
-      }
+    if (!sauceSlotsSatisfied(session.order)) {
+      session.stage = "sauce";
+      const needed = saucesAllowed(session.order.quantity) - session.order.sauces.length;
+      return sayAndStore(
+        session,
+        res,
+        `Got it. ${session.order.quantity} ${session.order.style} wings. I still need ${needed} more sauce${needed > 1 ? "s" : ""}. What sauce would you like?`
+      );
+    }
 
-      if (session.order.comboSide && !session.order.comboDrink) {
-        session.stage = "combo_drink";
+    if (session.order.isCombo === true) {
+      if (session.order.comboSide) {
+        session.stage = "included_dip";
+        const dipCount = dipsIncluded(session.order.quantity);
         return sayAndStore(
           session,
           res,
-          `Perfect. I have ${session.order.quantity} ${session.order.style} wings with ${session.order.sauce} as a combo, with ${session.order.comboSide}. What would you like to drink?`
+          `Perfect. I have ${session.order.quantity} ${session.order.style} wings with ${sauceSummary(session.order.sauces)} as a combo with ${session.order.comboSide}. That comes with ${dipCount} dipping sauce${dipCount > 1 ? "s" : ""}. Would you like ranch or blue cheese?`
         );
       }
 
@@ -441,7 +456,7 @@ app.post("/speech", (req, res) => {
       return sayAndStore(
         session,
         res,
-        `Got it. ${session.order.quantity} ${session.order.style} wings with ${session.order.sauce} as a combo. For the combo side, would you like regular fries, sweet potato fries, or potato salad?`
+        `Got it. ${session.order.quantity} ${session.order.style} wings with ${sauceSummary(session.order.sauces)} as a combo. For the combo side, would you like regular fries, sweet potato fries, or potato salad?`
       );
     }
 
@@ -450,152 +465,194 @@ app.post("/speech", (req, res) => {
       return sayAndStore(
         session,
         res,
-        `Got it. ${session.order.quantity} ${session.order.style} wings with ${session.order.sauce}. Would you like to make that a combo?`
+        `Got it. ${session.order.quantity} ${session.order.style} wings with ${sauceSummary(session.order.sauces)}. Would you like to make that a combo?`
       );
     }
 
-    session.stage = "dip";
+    session.stage = "included_dip";
+    const dipCount = dipsIncluded(session.order.quantity);
     return sayAndStore(
       session,
       res,
-      `Perfect. I have ${orderSummary(session.order)}. Would you like any dipping sauce?`
+      `Perfect. I have ${session.order.quantity} ${session.order.style} wings with ${sauceSummary(session.order.sauces)}. That comes with ${dipCount} dipping sauce${dipCount > 1 ? "s" : ""}. Would you like ranch or blue cheese?`
     );
   }
 
-  if (session.stage === "combo_offer") {
-    if (isYes(speech) || wantsCombo(speech)) {
-      session.order.isCombo = true;
-      parseOrderFromSpeech(speech, session.order);
+  // SAUCE
+  if (session.stage === "sauce") {
+    const sauces = extractSauces(speech);
 
-      if (session.order.comboSide && session.order.comboDrink) {
-        session.stage = "dip";
+    if (!sauces.length) {
+      return sayAndStore(session, res, "Sorry, I missed that. What sauce would you like?");
+    }
+
+    for (const sauce of sauces) {
+      if (session.order.sauces.length < saucesAllowed(session.order.quantity)) {
+        session.order.sauces.push(sauce);
+      }
+    }
+
+    if (!sauceSlotsSatisfied(session.order)) {
+      const needed = saucesAllowed(session.order.quantity) - session.order.sauces.length;
+      return sayAndStore(
+        session,
+        res,
+        `Perfect. I still need ${needed} more sauce${needed > 1 ? "s" : ""}. What other sauce would you like?`
+      );
+    }
+
+    if (session.order.isCombo === true) {
+      if (session.order.comboSide) {
+        session.stage = "included_dip";
+        const dipCount = dipsIncluded(session.order.quantity);
         return sayAndStore(
           session,
           res,
-          `Perfect. I have ${orderSummary(session.order)}. Would you like any dipping sauce?`
+          `Perfect. That comes with ${dipCount} dipping sauce${dipCount > 1 ? "s" : ""}. Would you like ranch or blue cheese?`
         );
       }
 
+      session.stage = "combo_side";
+      return sayAndStore(
+        session,
+        res,
+        "Perfect. For the combo side, would you like regular fries, sweet potato fries, or potato salad?"
+      );
+    }
+
+    if (session.order.isCombo === null) {
+      session.stage = "combo_offer";
+      return sayAndStore(
+        session,
+        res,
+        `Got it. ${session.order.quantity} ${session.order.style} wings with ${sauceSummary(session.order.sauces)}. Would you like to make that a combo?`
+      );
+    }
+
+    session.stage = "included_dip";
+    const dipCount = dipsIncluded(session.order.quantity);
+    return sayAndStore(
+      session,
+      res,
+      `Perfect. That comes with ${dipCount} dipping sauce${dipCount > 1 ? "s" : ""}. Would you like ranch or blue cheese?`
+    );
+  }
+
+  // COMBO OFFER
+  if (session.stage === "combo_offer") {
+    if (isYes(speech) || wantsCombo(speech)) {
+      session.order.isCombo = true;
+      const comboSide = extractComboSide(speech);
+      if (comboSide) session.order.comboSide = comboSide;
+
       if (session.order.comboSide) {
-        session.stage = "combo_drink";
-        return sayAndStore(session, res, "Perfect. What would you like to drink with the combo?");
+        session.stage = "included_dip";
+        const dipCount = dipsIncluded(session.order.quantity);
+        return sayAndStore(
+          session,
+          res,
+          `Perfect. I have ${session.order.quantity} ${session.order.style} wings with ${sauceSummary(session.order.sauces)} as a combo with ${session.order.comboSide}. That comes with ${dipCount} dipping sauce${dipCount > 1 ? "s" : ""}. Would you like ranch or blue cheese?`
+        );
       }
 
       session.stage = "combo_side";
-      return sayAndStore(session, res, "Perfect. For the combo side, would you like regular fries, sweet potato fries, or potato salad?");
+      return sayAndStore(
+        session,
+        res,
+        "Perfect. For the combo side, would you like regular fries, sweet potato fries, or potato salad?"
+      );
     }
 
     if (isNo(speech)) {
       session.order.isCombo = false;
-      session.stage = "dip";
-      return sayAndStore(session, res, "No problem. Would you like any dipping sauce?");
+      session.stage = "included_dip";
+      const dipCount = dipsIncluded(session.order.quantity);
+      return sayAndStore(
+        session,
+        res,
+        `No problem. That comes with ${dipCount} dipping sauce${dipCount > 1 ? "s" : ""}. Would you like ranch or blue cheese?`
+      );
     }
 
-    parseOrderFromSpeech(speech, session.order);
-
-    if (session.order.comboSide || session.order.comboDrink || wantsCombo(speech)) {
+    const comboSide = extractComboSide(speech);
+    if (comboSide) {
       session.order.isCombo = true;
-
-      if (!session.order.comboSide) {
-        session.stage = "combo_side";
-        return sayAndStore(session, res, "Sounds good. For the combo side, would you like regular fries, sweet potato fries, or potato salad?");
-      }
-
-      if (!session.order.comboDrink) {
-        session.stage = "combo_drink";
-        return sayAndStore(session, res, "And what would you like to drink?");
-      }
-
-      session.stage = "dip";
-      return sayAndStore(session, res, `Perfect. I have ${orderSummary(session.order)}. Would you like any dipping sauce?`);
+      session.order.comboSide = comboSide;
+      session.stage = "included_dip";
+      const dipCount = dipsIncluded(session.order.quantity);
+      return sayAndStore(
+        session,
+        res,
+        `Perfect. I have ${session.order.quantity} ${session.order.style} wings with ${sauceSummary(session.order.sauces)} as a combo with ${session.order.comboSide}. That comes with ${dipCount} dipping sauce${dipCount > 1 ? "s" : ""}. Would you like ranch or blue cheese?`
+      );
     }
 
     return sayAndStore(session, res, "Sorry, I missed that. Would you like to make it a combo?");
   }
 
+  // COMBO SIDE
   if (session.stage === "combo_side") {
     const comboSide = extractComboSide(speech);
 
     if (!comboSide) {
-      return sayAndStore(session, res, "Sorry, I missed that. For the combo side, would you like regular fries, sweet potato fries, or potato salad?");
-    }
-
-    session.order.comboSide = comboSide;
-
-    if (session.order.comboDrink) {
-      session.stage = "dip";
       return sayAndStore(
         session,
         res,
-        `Perfect. I have ${orderSummary(session.order)}. Would you like any dipping sauce?`
+        "Sorry, I missed that. For the combo side, would you like regular fries, sweet potato fries, or potato salad?"
       );
     }
 
-    session.stage = "combo_drink";
-    return sayAndStore(session, res, "Perfect. What would you like to drink?");
-  }
-
-  if (session.stage === "combo_drink") {
-    const drink = extractDrink(speech);
-
-    if (!drink) {
-      return sayAndStore(session, res, "Sorry, I missed that. What would you like to drink with the combo?");
-    }
-
-    session.order.comboDrink = drink;
-    session.stage = "dip";
+    session.order.comboSide = comboSide;
+    session.stage = "included_dip";
+    const dipCount = dipsIncluded(session.order.quantity);
 
     return sayAndStore(
       session,
       res,
-      `Perfect. I have ${orderSummary(session.order)}. Would you like any dipping sauce?`
+      `Perfect. That comes with ${dipCount} dipping sauce${dipCount > 1 ? "s" : ""}. Would you like ranch or blue cheese?`
     );
   }
 
-  if (session.stage === "dip") {
+  // INCLUDED DIP
+  if (session.stage === "included_dip") {
     const dip = extractDip(speech);
 
-    if (dip) {
-      addDip(session.order, dip, extractDipQty(speech));
-      session.stage = "dip_confirm";
+    if (!dip) {
+      return sayAndStore(session, res, "Would you like ranch or blue cheese?");
+    }
+
+    addIncludedDip(session.order, dip, extractDipQty(speech));
+
+    if (!includedDipsSatisfied(session.order)) {
+      const needed = dipsIncluded(session.order.quantity) - session.order.includedDips.length;
       return sayAndStore(
         session,
         res,
-        `Got it. You have ${summarizeDips(session.order.dips)}. Would you like any additional dipping sauce?`
+        `Got it. I still need ${needed} more included dipping sauce${needed > 1 ? "s" : ""}. Ranch or blue cheese?`
       );
     }
 
-    if (isNo(speech)) {
-      session.stage = "upsell";
-      return sayAndStore(session, res, "Would you like to add fries, corn ribs, mac bites, or mozzarella sticks?");
-    }
-
-    return sayAndStore(session, res, "Would you like ranch or blue cheese?");
+    session.stage = "extra_upsell";
+    return sayAndStore(
+      session,
+      res,
+      "Perfect. Would you like any additional ranch or blue cheese, or maybe fries, corn ribs, mac bites, or mozzarella sticks?"
+    );
   }
 
-  if (session.stage === "dip_confirm") {
+  // EXTRA UPSELL
+  if (session.stage === "extra_upsell") {
     const dip = extractDip(speech);
-
-    if (dip) {
-      addDip(session.order, dip, extractDipQty(speech));
-      return sayAndStore(
-        session,
-        res,
-        `Perfect. You now have ${summarizeDips(session.order.dips)}. Any other dipping sauce?`
-      );
-    }
-
-    if (isNo(speech)) {
-      session.stage = "upsell";
-      return sayAndStore(session, res, "Would you like to add fries, corn ribs, mac bites, or mozzarella sticks?");
-    }
-
-    session.stage = "upsell";
-    return sayAndStore(session, res, "Got it. Would you like to add fries, corn ribs, mac bites, or mozzarella sticks?");
-  }
-
-  if (session.stage === "upsell") {
     const side = extractExtraSide(speech);
+
+    if (dip) {
+      addExtraDip(session.order, dip, extractDipQty(speech));
+      return sayAndStore(
+        session,
+        res,
+        "Perfect. Anything else? You can add extra ranch, blue cheese, fries, corn ribs, mac bites, or mozzarella sticks."
+      );
+    }
 
     if (side) {
       session.order.extraSide = side;
@@ -608,9 +665,14 @@ app.post("/speech", (req, res) => {
       return sayAndStore(session, res, "Sounds good. What name is the order under?");
     }
 
-    return sayAndStore(session, res, "Sorry, I missed that. Would you like to add fries, corn ribs, mac bites, or mozzarella sticks?");
+    return sayAndStore(
+      session,
+      res,
+      "Sorry, I missed that. Would you like any additional ranch or blue cheese, or maybe a side?"
+    );
   }
 
+  // NAME
   if (session.stage === "name") {
     const name = extractName(speech);
 
@@ -633,8 +695,11 @@ app.post("/speech", (req, res) => {
   return sayAndStore(session, res, "Let's get started. What can I get for you today?");
 });
 
+// =====================================================
+// HEALTHCHECK
+// =====================================================
 app.get("/", (req, res) => {
-  res.send("Jeffrey AI Cashier 1.5 combo-side fix is running.");
+  res.send("Jeffrey AI Cashier 1.5 Flaps demo version is running.");
 });
 
 app.listen(PORT, () => {
