@@ -11,10 +11,14 @@ app.use(bodyParser.json());
 const PORT = process.env.PORT || 3000;
 
 // =====================================================
-// MENU / CONFIG
+// CONFIG
 // =====================================================
+const VOICE = "Polly.Matthew";
 const VALID_WING_COUNTS = [6, 9, 12, 18, 24, 48];
 
+// =====================================================
+// MENU
+// =====================================================
 const SAUCE_ALIASES = [
   { keys: ["mild", "buffalo mild"], value: "mild" },
   { keys: ["hot", "buffalo hot"], value: "hot" },
@@ -31,11 +35,19 @@ const SAUCE_ALIASES = [
   { keys: ["cinnamon roll"], value: "cinnamon roll" }
 ];
 
-const SIDE_ALIASES = [
-  { keys: ["fries", "french fries"], value: "fries" },
-  { keys: ["mac bites", "mac bite", "mac", "mac and cheese bites"], value: "mac bites" },
+const EXTRA_SIDE_ALIASES = [
   { keys: ["corn ribs", "corn"], value: "corn ribs" },
-  { keys: ["mozzarella sticks", "mozz sticks", "mozzarella", "mozz"], value: "mozzarella sticks" }
+  { keys: ["mac bites", "mac bite", "mac", "mac and cheese bites"], value: "mac bites" },
+  { keys: ["mozzarella sticks", "mozz sticks", "mozzarella", "mozz"], value: "mozzarella sticks" },
+  { keys: ["fries", "regular fries", "french fries"], value: "regular fries" },
+  { keys: ["sweet potato fries", "sweet fries"], value: "sweet potato fries" },
+  { keys: ["potato salad"], value: "potato salad" }
+];
+
+const COMBO_SIDE_ALIASES = [
+  { keys: ["regular fries", "fries", "french fries"], value: "regular fries" },
+  { keys: ["sweet potato fries", "sweet fries"], value: "sweet potato fries" },
+  { keys: ["potato salad"], value: "potato salad" }
 ];
 
 const DIP_ALIASES = [
@@ -54,9 +66,6 @@ const DRINK_ALIASES = [
   { keys: ["water"], value: "water" }
 ];
 
-// demo voice
-const VOICE = "Polly.Matthew";
-
 // =====================================================
 // SESSIONS
 // =====================================================
@@ -68,9 +77,10 @@ function blankOrder() {
     style: null,
     sauce: null,
     dips: [],
-    side: null,
+    extraSide: null,
     name: null,
     isCombo: null,
+    comboSide: null,
     comboDrink: null,
     itemType: "wings"
   };
@@ -161,8 +171,12 @@ function extractSauce(text) {
   return findAlias(text, SAUCE_ALIASES);
 }
 
-function extractSide(text) {
-  return findAlias(text, SIDE_ALIASES);
+function extractComboSide(text) {
+  return findAlias(text, COMBO_SIDE_ALIASES);
+}
+
+function extractExtraSide(text) {
+  return findAlias(text, EXTRA_SIDE_ALIASES);
 }
 
 function extractDrink(text) {
@@ -257,14 +271,16 @@ function orderSummary(order) {
 
   if (order.isCombo) {
     base += " as a combo";
-    if (order.side) base += `, side of ${order.side}`;
+    if (order.comboSide) base += `, with ${order.comboSide}`;
     if (order.comboDrink) base += `, and ${order.comboDrink} to drink`;
-  } else if (order.side) {
-    base += `, plus ${order.side}`;
   }
 
   if (order.dips.length) {
     base += `, with ${summarizeDips(order.dips)}`;
+  }
+
+  if (order.extraSide) {
+    base += `, plus ${order.extraSide}`;
   }
 
   return base;
@@ -283,14 +299,14 @@ function parseOrderFromSpeech(text, order) {
   const quantity = extractNumber(text);
   const style = extractStyle(text);
   const sauce = extractSauce(text);
-  const side = extractSide(text);
+  const comboSide = extractComboSide(text);
   const drink = extractDrink(text);
   const dip = extractDip(text);
 
   if (quantity) order.quantity = quantity;
   if (style) order.style = style;
   if (sauce) order.sauce = sauce;
-  if (side) order.side = side;
+  if (comboSide) order.comboSide = comboSide;
   if (drink) order.comboDrink = drink;
   if (wantsCombo(text)) order.isCombo = true;
 
@@ -315,7 +331,7 @@ function nextPromptForMissing(order) {
 }
 
 // =====================================================
-// GLOBAL INTERRUPTION HANDLER
+// INTERRUPTION HANDLER
 // =====================================================
 function handleInterruptions(session, speech, res) {
   if (wantsStartOver(speech)) {
@@ -350,12 +366,12 @@ function handleInterruptions(session, speech, res) {
   if (wantsGoBack(speech)) {
     if (session.stage === "combo_drink") {
       session.stage = "combo_side";
-      return sayAndStore(session, res, "No problem. What side would you like with the combo?");
+      return sayAndStore(session, res, "No problem. For the combo, would you like regular fries, sweet potato fries, or potato salad?");
     }
 
     if (session.stage === "name") {
-      session.stage = session.order.isCombo ? "upsell" : "upsell";
-      return sayAndStore(session, res, "Sure. Would you like to add fries, corn ribs, mac bites, or mozzarella sticks?");
+      session.stage = "upsell";
+      return sayAndStore(session, res, "Sure. Would you like to add fries, corn ribs, mac bites, mozzarella sticks, or just keep it as is?");
     }
 
     return sayAndStore(session, res, "Sure. Tell me what you'd like to change.");
@@ -389,18 +405,11 @@ app.post("/speech", (req, res) => {
   const interruptionResponse = handleInterruptions(session, speech, res);
   if (interruptionResponse) return interruptionResponse;
 
-  // -------------------------------------------------
-  // LANGUAGE
-  // -------------------------------------------------
   if (session.stage === "language") {
     session.stage = "order";
     return sayAndStore(session, res, "What can I get started for you today?");
   }
 
-  // -------------------------------------------------
-  // ORDER
-  // Faster capture: quantity + style + sauce + combo + dip + side
-  // -------------------------------------------------
   if (session.stage === "order") {
     parseOrderFromSpeech(speech, session.order);
 
@@ -410,9 +419,7 @@ app.post("/speech", (req, res) => {
     }
 
     if (session.order.isCombo === true) {
-      session.stage = "combo_side";
-
-      if (session.order.side && session.order.comboDrink) {
+      if (session.order.comboSide && session.order.comboDrink) {
         session.stage = "dip";
         return sayAndStore(
           session,
@@ -421,19 +428,20 @@ app.post("/speech", (req, res) => {
         );
       }
 
-      if (session.order.side && !session.order.comboDrink) {
+      if (session.order.comboSide && !session.order.comboDrink) {
         session.stage = "combo_drink";
         return sayAndStore(
           session,
           res,
-          `Perfect. I have ${session.order.quantity} ${session.order.style} wings with ${session.order.sauce} as a combo, with ${session.order.side}. What would you like to drink?`
+          `Perfect. I have ${session.order.quantity} ${session.order.style} wings with ${session.order.sauce} as a combo, with ${session.order.comboSide}. What would you like to drink?`
         );
       }
 
+      session.stage = "combo_side";
       return sayAndStore(
         session,
         res,
-        `Got it. ${session.order.quantity} ${session.order.style} wings with ${session.order.sauce} as a combo. What side would you like with that?`
+        `Got it. ${session.order.quantity} ${session.order.style} wings with ${session.order.sauce} as a combo. For the combo side, would you like regular fries, sweet potato fries, or potato salad?`
       );
     }
 
@@ -454,15 +462,12 @@ app.post("/speech", (req, res) => {
     );
   }
 
-  // -------------------------------------------------
-  // COMBO OFFER
-  // -------------------------------------------------
   if (session.stage === "combo_offer") {
     if (isYes(speech) || wantsCombo(speech)) {
       session.order.isCombo = true;
       parseOrderFromSpeech(speech, session.order);
 
-      if (session.order.side && session.order.comboDrink) {
+      if (session.order.comboSide && session.order.comboDrink) {
         session.stage = "dip";
         return sayAndStore(
           session,
@@ -471,13 +476,13 @@ app.post("/speech", (req, res) => {
         );
       }
 
-      if (session.order.side) {
+      if (session.order.comboSide) {
         session.stage = "combo_drink";
         return sayAndStore(session, res, "Perfect. What would you like to drink with the combo?");
       }
 
       session.stage = "combo_side";
-      return sayAndStore(session, res, "Perfect. What side would you like with the combo?");
+      return sayAndStore(session, res, "Perfect. For the combo side, would you like regular fries, sweet potato fries, or potato salad?");
     }
 
     if (isNo(speech)) {
@@ -488,12 +493,12 @@ app.post("/speech", (req, res) => {
 
     parseOrderFromSpeech(speech, session.order);
 
-    if (session.order.side || session.order.comboDrink || wantsCombo(speech)) {
+    if (session.order.comboSide || session.order.comboDrink || wantsCombo(speech)) {
       session.order.isCombo = true;
 
-      if (!session.order.side) {
+      if (!session.order.comboSide) {
         session.stage = "combo_side";
-        return sayAndStore(session, res, "Sounds good. What side would you like with the combo?");
+        return sayAndStore(session, res, "Sounds good. For the combo side, would you like regular fries, sweet potato fries, or potato salad?");
       }
 
       if (!session.order.comboDrink) {
@@ -508,15 +513,14 @@ app.post("/speech", (req, res) => {
     return sayAndStore(session, res, "Sorry, I missed that. Would you like to make it a combo?");
   }
 
-  // -------------------------------------------------
-  // COMBO SIDE
-  // -------------------------------------------------
   if (session.stage === "combo_side") {
-    parseOrderFromSpeech(speech, session.order);
+    const comboSide = extractComboSide(speech);
 
-    if (!session.order.side) {
-      return sayAndStore(session, res, "What side would you like with the combo? Fries, corn ribs, or mac bites?");
+    if (!comboSide) {
+      return sayAndStore(session, res, "Sorry, I missed that. For the combo side, would you like regular fries, sweet potato fries, or potato salad?");
     }
+
+    session.order.comboSide = comboSide;
 
     if (session.order.comboDrink) {
       session.stage = "dip";
@@ -531,17 +535,16 @@ app.post("/speech", (req, res) => {
     return sayAndStore(session, res, "Perfect. What would you like to drink?");
   }
 
-  // -------------------------------------------------
-  // COMBO DRINK
-  // -------------------------------------------------
   if (session.stage === "combo_drink") {
-    parseOrderFromSpeech(speech, session.order);
+    const drink = extractDrink(speech);
 
-    if (!session.order.comboDrink) {
-      return sayAndStore(session, res, "What would you like to drink with the combo?");
+    if (!drink) {
+      return sayAndStore(session, res, "Sorry, I missed that. What would you like to drink with the combo?");
     }
 
+    session.order.comboDrink = drink;
     session.stage = "dip";
+
     return sayAndStore(
       session,
       res,
@@ -549,11 +552,7 @@ app.post("/speech", (req, res) => {
     );
   }
 
-  // -------------------------------------------------
-  // DIP
-  // -------------------------------------------------
   if (session.stage === "dip") {
-    parseOrderFromSpeech(speech, session.order);
     const dip = extractDip(speech);
 
     if (dip) {
@@ -574,9 +573,6 @@ app.post("/speech", (req, res) => {
     return sayAndStore(session, res, "Would you like ranch or blue cheese?");
   }
 
-  // -------------------------------------------------
-  // DIP CONFIRM
-  // -------------------------------------------------
   if (session.stage === "dip_confirm") {
     const dip = extractDip(speech);
 
@@ -598,20 +594,11 @@ app.post("/speech", (req, res) => {
     return sayAndStore(session, res, "Got it. Would you like to add fries, corn ribs, mac bites, or mozzarella sticks?");
   }
 
-  // -------------------------------------------------
-  // UPSELL
-  // -------------------------------------------------
   if (session.stage === "upsell") {
-    const side = extractSide(speech);
+    const side = extractExtraSide(speech);
 
     if (side) {
-      // If combo already has a side, treat this as an extra add-on mention only in summary
-      if (!session.order.side) {
-        session.order.side = side;
-      } else if (session.order.side !== side) {
-        session.order.side = `${session.order.side} and ${side}`;
-      }
-
+      session.order.extraSide = side;
       session.stage = "name";
       return sayAndStore(session, res, `Perfect, adding ${side}. What name is the order under?`);
     }
@@ -621,12 +608,9 @@ app.post("/speech", (req, res) => {
       return sayAndStore(session, res, "Sounds good. What name is the order under?");
     }
 
-    return sayAndStore(session, res, "Sorry, I missed that. Would you like fries, corn ribs, mac bites, or mozzarella sticks?");
+    return sayAndStore(session, res, "Sorry, I missed that. Would you like to add fries, corn ribs, mac bites, or mozzarella sticks?");
   }
 
-  // -------------------------------------------------
-  // NAME
-  // -------------------------------------------------
   if (session.stage === "name") {
     const name = extractName(speech);
 
@@ -645,16 +629,12 @@ app.post("/speech", (req, res) => {
     );
   }
 
-  // fallback
   session.stage = "order";
   return sayAndStore(session, res, "Let's get started. What can I get for you today?");
 });
 
-// =====================================================
-// HEALTHCHECK
-// =====================================================
 app.get("/", (req, res) => {
-  res.send("Jeffrey AI Cashier 1.5 Demo Killer is running.");
+  res.send("Jeffrey AI Cashier 1.5 combo-side fix is running.");
 });
 
 app.listen(PORT, () => {
