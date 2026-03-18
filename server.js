@@ -1,6 +1,8 @@
-const express = require("express");
-const bodyParser = require("body-parser");
-const { twiml: { VoiceResponse } } = require("twilio");
+import express from "express";
+import bodyParser from "body-parser";
+import twilio from "twilio";
+
+const { twiml: { VoiceResponse } } = twilio;
 
 const app = express();
 app.use(bodyParser.urlencoded({ extended: false }));
