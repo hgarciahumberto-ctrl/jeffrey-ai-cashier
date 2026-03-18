@@ -256,15 +256,54 @@ function extractDipQuantity(text) {
 }
 
 function extractName(text) {
-  const raw = text.trim();
+  const raw = (text || "").trim();
+
+  if (!raw) return null;
+
+  const cleaned = raw
+    .replace(/[.,!?]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
 
   const patterns = [
     /my name is ([a-zA-Z\s'-]+)/i,
     /it's ([a-zA-Z\s'-]+)/i,
     /it is ([a-zA-Z\s'-]+)/i,
     /this is ([a-zA-Z\s'-]+)/i,
-    /^([a-zA-Z\s'-]{2,})$/i
+    /name is ([a-zA-Z\s'-]+)/i
   ];
+
+  for (const pattern of patterns) {
+    const m = cleaned.match(pattern);
+    if (m && m[1]) {
+      return formatName(m[1]);
+    }
+  }
+
+  // If the user just says a simple name like "Humberto"
+  if (/^[a-zA-Z][a-zA-Z\s'-]{1,30}$/.test(cleaned)) {
+    const words = cleaned.split(" ");
+
+    // Avoid treating common non-name answers as names
+    const blocked = [
+      "yes", "no", "nope", "yeah", "yep", "okay", "ok",
+      "thats all", "that's all", "done", "pickup", "to go"
+    ];
+
+    if (!blocked.includes(cleaned.toLowerCase()) && words.length <= 3) {
+      return formatName(cleaned);
+    }
+  }
+
+  return null;
+}
+
+function formatName(name) {
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/\b\w/g, c => c.toUpperCase());
+}
 
   for (const pattern of patterns) {
     const m = raw.match(pattern);
