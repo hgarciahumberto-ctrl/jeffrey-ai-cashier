@@ -107,10 +107,10 @@ const FRIENDLY_OPENERS = [
   "Alright."
 ];
 
-const ADD_ON_PROMPTS = [
-  "Want to add fries, corn ribs, mozzarella sticks, or a dipping sauce?",
-  "Would you like fries, corn ribs, mac bites, or maybe a ranch with that?",
-  "Do you want to add a side or dipping sauce with that?"
+const SIDE_PROMPTS = [
+  "Would you like to add fries, corn ribs, or mac bites?",
+  "Want to add fries, mozzarella sticks, or corn ribs with that?",
+  "Can I get you a side with that, maybe fries or corn ribs?"
 ];
 
 const ANYTHING_ELSE_PROMPTS = [
@@ -325,6 +325,16 @@ function looksLikeWingsIntent(text) {
   );
 }
 
+function looksLikeDipIntent(text) {
+  const t = normalizeText(text);
+  return extractDip(t) != null;
+}
+
+function looksLikeSideIntent(text) {
+  const t = normalizeText(text);
+  return extractSide(t) != null;
+}
+
 // ------------------------
 // Order parsing
 // ------------------------
@@ -425,6 +435,28 @@ function buildOrderSummary(order) {
   return parts.join(" ");
 }
 
+function buildMainOrderSummary(order) {
+  const parts = [];
+
+  if (order.quantity && order.style) {
+    parts.push(`${order.quantity} ${order.style} wings`);
+  } else if (order.quantity) {
+    parts.push(`${order.quantity} wings`);
+  } else if (order.style) {
+    parts.push(`${order.style} wings`);
+  }
+
+  if (order.sauce && order.sauce2 && order.splitSauce) {
+    parts.push(`half ${order.sauce} and half ${order.sauce2}`);
+  } else if (order.sauce && order.sauce2) {
+    parts.push(`${order.sauce} and ${order.sauce2}`);
+  } else if (order.sauce) {
+    parts.push(order.sauce);
+  }
+
+  return parts.join(" ");
+}
+
 function hasCompleteMainWingOrder(order) {
   return !!(order.quantity && order.style && order.sauce);
 }
@@ -500,9 +532,7 @@ app.post("/speech", (req, res) => {
 
   console.log("CALL:", callSid, "STAGE:", session.stage, "SPEECH:", speech);
 
-  // ------------------------
   // LANGUAGE
-  // ------------------------
   if (session.stage === "language") {
     if (text.includes("spanish") || text.includes("español") || text.includes("espanol")) {
       session.language = "es";
@@ -515,46 +545,134 @@ app.post("/speech", (req, res) => {
 
     session.language = "en";
     session.stage = "order";
-    return speak(
-      res,
-      "Great. What can I get started for you today?"
-    );
+    return speak(res, "Great. What can I get started for you today?");
   }
 
-  // ------------------------
   // MAIN ORDER
-  // ------------------------
   if (session.stage === "order") {
     const parsed = parseOrderFromSpeech(speech);
     mergeOrder(session.order, parsed);
 
     const missingQuestion = nextMissingQuestion(session.order);
     if (missingQuestion) {
-      return speak(
-        res,
-        `${pick(FRIENDLY_OPENERS)} ${missingQuestion}`
-      );
+      return speak(res, `${pick(FRIENDLY_OPENERS)} ${missingQuestion}`);
     }
 
-    session.stage = "extras";
-    const summary = buildOrderSummary(session.order);
-
+    session.stage = "dip";
+    const mainSummary = buildMainOrderSummary(session.order);
     return speak(
       res,
-      `${pick(FRIENDLY_OPENERS)} I have ${summary}. ${pick(ADD_ON_PROMPTS)}`
+      `${pick(FRIENDLY_OPENERS)} I have ${mainSummary}. Would you like any dipping sauce with that?`
     );
   }
 
-  // ------------------------
-  // EXTRAS / CORRECTIONS
-  // ------------------------
-  if (session.stage === "extras") {
+  // DIPPING SAUCE STEP
+  if (session.stage === "dip") {
     if (isDone(speech) || isNo(speech)) {
-      session.stage = "name";
+      session.stage = "side";
+      return speak(res, pick(SIDE_PROMPTS));
+    }
+
+    const parsed = parseOrderFromSpeech(speech);
+
+    if (looksLikeCorrection(speech)) {
+      mergeOrder(session.order, parsed);
+
+      const missingQuestion = nextMissingQuestion(session.order);
+      if (missingQuestion) {
+        session.stage = "order";
+        return speak(res, `No problem. ${missingQuestion}`);
+      }
+
+      if (parsed.dip || looksLikeDipIntent(speech)) {
+        session.stage = "side";
+        return speak(
+          res,
+          `Got it, you have ${dipText(session.order)}. Would you like any additional dipping sauce?`
+        );
+      }
+
+      const mainSummary = buildMainOrderSummary(session.order);
       return speak(
         res,
-        "Perfect. Can I get a name for the order?"
+        `Got it. I updated that to ${mainSummary}. Would you like any dipping sauce with that?`
       );
+    }
+
+    if (parsed.dip || looksLikeDipIntent(speech)) {
+      mergeOrder(session.order, parsed);
+      session.stage = "dip_confirm";
+      return speak(
+        res,
+        `Perfect, you have ${dipText(session.order)}. Would you like any additional dipping sauce?`
+      );
+    }
+
+    if (looksLikeSideIntent(speech)) {
+      mergeOrder(session.order, parsed);
+      session.stage = "extras";
+      const summary = buildOrderSummary(session.order);
+      return speak(
+        res,
+        `${pick(FRIENDLY_OPENERS)} Now I have ${summary}. ${pick(ANYTHING_ELSE_PROMPTS)}`
+      );
+    }
+
+    return speak(
+      res,
+      "Sorry, I missed that. Would you like any dipping sauce, like ranch or blue cheese?"
+    );
+  }
+
+  // DIP CONFIRM
+  if (session.stage === "dip_confirm") {
+    if (isYes(speech)) {
+      session.stage = "dip";
+      return speak(res, "Sure. What dipping sauce would you like?");
+    }
+
+    if (isNo(speech) || isDone(speech)) {
+      session.stage = "side";
+      return speak(res, pick(SIDE_PROMPTS));
+    }
+
+    const parsed = parseOrderFromSpeech(speech);
+
+    if (parsed.dip || looksLikeDipIntent(speech)) {
+      // Add to existing dip quantity if same dip type, otherwise replace for demo simplicity
+      if (session.order.dip && parsed.dip === session.order.dip) {
+        const currentQty = session.order.dipQty || 1;
+        const addQty = parsed.dipQty || 1;
+        session.order.dipQty = currentQty + addQty;
+      } else {
+        mergeOrder(session.order, parsed);
+      }
+
+      return speak(
+        res,
+        `Got it, you have ${dipText(session.order)}. Would you like any additional dipping sauce?`
+      );
+    }
+
+    if (looksLikeSideIntent(speech)) {
+      mergeOrder(session.order, parsed);
+      session.stage = "extras";
+      const summary = buildOrderSummary(session.order);
+      return speak(
+        res,
+        `${pick(FRIENDLY_OPENERS)} Now I have ${summary}. ${pick(ANYTHING_ELSE_PROMPTS)}`
+      );
+    }
+
+    session.stage = "side";
+    return speak(res, pick(SIDE_PROMPTS));
+  }
+
+  // SIDE STEP
+  if (session.stage === "side") {
+    if (isDone(speech) || isNo(speech)) {
+      session.stage = "name";
+      return speak(res, "Perfect. Can I get a name for the order?");
     }
 
     const parsed = parseOrderFromSpeech(speech);
@@ -564,10 +682,59 @@ app.post("/speech", (req, res) => {
       const missingQuestion = nextMissingQuestion(session.order);
 
       if (missingQuestion) {
-        return speak(
-          res,
-          `No problem. ${missingQuestion}`
-        );
+        session.stage = "order";
+        return speak(res, `No problem. ${missingQuestion}`);
+      }
+
+      const summary = buildOrderSummary(session.order);
+      session.stage = "extras";
+      return speak(
+        res,
+        `Got it. I updated that to ${summary}. ${pick(ANYTHING_ELSE_PROMPTS)}`
+      );
+    }
+
+    if (parsed.side || looksLikeSideIntent(speech)) {
+      mergeOrder(session.order, parsed);
+      session.stage = "extras";
+      const summary = buildOrderSummary(session.order);
+      return speak(
+        res,
+        `${pick(FRIENDLY_OPENERS)} Now I have ${summary}. ${pick(ANYTHING_ELSE_PROMPTS)}`
+      );
+    }
+
+    if (parsed.dip || looksLikeDipIntent(speech)) {
+      mergeOrder(session.order, parsed);
+      session.stage = "dip_confirm";
+      return speak(
+        res,
+        `Perfect, you have ${dipText(session.order)}. Would you like any additional dipping sauce?`
+      );
+    }
+
+    return speak(
+      res,
+      "Sorry, I missed that. Would you like to add fries, corn ribs, mac bites, or mozzarella sticks?"
+    );
+  }
+
+  // EXTRAS
+  if (session.stage === "extras") {
+    if (isDone(speech) || isNo(speech)) {
+      session.stage = "name";
+      return speak(res, "Perfect. Can I get a name for the order?");
+    }
+
+    const parsed = parseOrderFromSpeech(speech);
+
+    if (looksLikeCorrection(speech)) {
+      mergeOrder(session.order, parsed);
+      const missingQuestion = nextMissingQuestion(session.order);
+
+      if (missingQuestion) {
+        session.stage = "order";
+        return speak(res, `No problem. ${missingQuestion}`);
       }
 
       const summary = buildOrderSummary(session.order);
@@ -577,10 +744,24 @@ app.post("/speech", (req, res) => {
       );
     }
 
-    if (parsed.dip || parsed.side) {
+    if (parsed.dip || looksLikeDipIntent(speech)) {
+      if (session.order.dip && parsed.dip === session.order.dip) {
+        const currentQty = session.order.dipQty || 1;
+        const addQty = parsed.dipQty || 1;
+        session.order.dipQty = currentQty + addQty;
+      } else {
+        mergeOrder(session.order, parsed);
+      }
+
+      return speak(
+        res,
+        `Perfect, you have ${dipText(session.order)}. ${pick(ANYTHING_ELSE_PROMPTS)}`
+      );
+    }
+
+    if (parsed.side || looksLikeSideIntent(speech)) {
       mergeOrder(session.order, parsed);
       const summary = buildOrderSummary(session.order);
-
       return speak(
         res,
         `${pick(FRIENDLY_OPENERS)} Now I have ${summary}. ${pick(ANYTHING_ELSE_PROMPTS)}`
@@ -592,10 +773,8 @@ app.post("/speech", (req, res) => {
       const missingQuestion = nextMissingQuestion(session.order);
 
       if (missingQuestion) {
-        return speak(
-          res,
-          `${pick(FRIENDLY_OPENERS)} ${missingQuestion}`
-        );
+        session.stage = "order";
+        return speak(res, `${pick(FRIENDLY_OPENERS)} ${missingQuestion}`);
       }
 
       const summary = buildOrderSummary(session.order);
@@ -607,13 +786,11 @@ app.post("/speech", (req, res) => {
 
     return speak(
       res,
-      "I missed that last part. You can add a ranch, blue cheese, fries, corn ribs, mozzarella sticks, or say that's all."
+      "I missed that last part. You can add fries, corn ribs, mac bites, mozzarella sticks, ranch, blue cheese, or say that's all."
     );
   }
 
-  // ------------------------
   // NAME
-  // ------------------------
   if (session.stage === "name") {
     const name = extractName(speech);
 
@@ -646,7 +823,7 @@ app.post("/speech", (req, res) => {
 // Health check
 // ------------------------
 app.get("/", (req, res) => {
-  res.send("Jeffrey AI Cashier 1.4.1 human menu version is running.");
+  res.send("Jeffrey AI Cashier 1.4.1 dip-flow version is running.");
 });
 
 app.listen(PORT, () => {
