@@ -27,12 +27,6 @@ const SAUCE_ALIASES = [
   { keys: ["cinnamon roll"], value: "cinnamon roll" }
 ];
 
-const COMBO_SIDE_ALIASES = [
-  { keys: ["regular fries", "fries", "french fries"], value: "regular fries" },
-  { keys: ["sweet potato fries", "sweet fries"], value: "sweet potato fries" },
-  { keys: ["potato salad"], value: "potato salad" }
-];
-
 const EXTRA_SIDE_ALIASES = [
   { keys: ["fries", "regular fries", "french fries"], value: "regular fries" },
   { keys: ["sweet potato fries", "sweet fries"], value: "sweet potato fries" },
@@ -56,8 +50,6 @@ function blankOrder() {
     sauces: [],
     includedDips: [],
     extraDips: [],
-    isCombo: null,
-    comboSide: null,
     extraSide: null,
     name: null
   };
@@ -160,10 +152,6 @@ function extractSauces(text) {
   return extractAllAliases(text, SAUCE_ALIASES);
 }
 
-function extractComboSide(text) {
-  return findAlias(text, COMBO_SIDE_ALIASES);
-}
-
 function extractExtraSide(text) {
   return findAlias(text, EXTRA_SIDE_ALIASES);
 }
@@ -208,15 +196,11 @@ function formatName(name) {
 }
 
 function isYes(text) {
-  return /\b(yes|yeah|yep|sure|okay|ok|sounds good|combo|make it a combo)\b/.test(text);
+  return /\b(yes|yeah|yep|sure|okay|ok|sounds good)\b/.test(text);
 }
 
 function isNo(text) {
-  return /\b(no|nope|nah|nothing else|that s all|thats all|no thank you|im good|i m good|just that)\b/.test(text);
-}
-
-function wantsCombo(text) {
-  return /\b(combo|make it a combo|as a combo|with a combo)\b/.test(text);
+  return /\b(no|nope|nah|nothing else|that s all|thats all|no thank you|im good|i m good|just that|keep it like that)\b/.test(text);
 }
 
 function wantsRepeat(text) {
@@ -293,10 +277,6 @@ function orderSummary(order) {
     summary += ` split as ${sauceSummary(order)}`;
   }
 
-  if (order.isCombo && order.comboSide) {
-    summary += `, as a combo with ${order.comboSide}`;
-  }
-
   if (order.includedDips.length) {
     summary += `, with included ${dipSummary(order.includedDips)}`;
   }
@@ -316,7 +296,6 @@ function parseCoreOrder(text, order) {
   const quantity = extractNumber(text);
   const style = extractStyle(text);
   const sauces = extractSauces(text);
-  const comboSide = extractComboSide(text);
 
   if (quantity) order.quantity = quantity;
   if (style) order.style = style;
@@ -325,8 +304,6 @@ function parseCoreOrder(text, order) {
       if (!order.sauces.includes(sauce)) order.sauces.push(sauce);
     }
   }
-  if (comboSide) order.comboSide = comboSide;
-  if (wantsCombo(text)) order.isCombo = true;
 }
 
 function missingCore(order) {
@@ -342,10 +319,6 @@ function nextPromptForMissing(order) {
   if (missing === "style") return "Would you like classic or boneless?";
   if (missing === "sauce") return "What sauce would you like?";
   return null;
-}
-
-function sauceSlotsSatisfied(order) {
-  return !!order.quantity && order.sauces.length > 0;
 }
 
 function addSauces(order, newSauces) {
@@ -414,8 +387,8 @@ app.post("/voice", (req, res) => {
   const session = getSession(req.body.CallSid);
   resetSession(session);
   session.stage = "language";
-  session.lastPrompt = "Thank you for calling Flaps and Racks. English or Spanish?";
-  return speak(res, "Thank you for calling Flaps and Racks. English or Spanish?");
+  session.lastPrompt = "Thank you for calling Flaps and Racks. This is Jeffrey. English or Spanish?";
+  return speak(res, "Thank you for calling Flaps and Racks. This is Jeffrey. English or Spanish?");
 });
 
 app.post("/speech", (req, res) => {
@@ -442,11 +415,6 @@ app.post("/speech", (req, res) => {
       return sayAndStore(session, res, nextPromptForMissing(session.order));
     }
 
-    if (!sauceSlotsSatisfied(session.order)) {
-      session.stage = "sauce";
-      return sayAndStore(session, res, "What sauce would you like?");
-    }
-
     const allowed = sauceSlotsAllowed(session.order.quantity);
     if (session.order.sauces.length < allowed) {
       session.stage = "sauce_more_or_done";
@@ -457,39 +425,12 @@ app.post("/speech", (req, res) => {
       );
     }
 
-    if (session.order.isCombo === true) {
-      if (session.order.comboSide) {
-        session.stage = "included_dip";
-        const dips = dipSlotsAllowed(session.order.quantity);
-        return sayAndStore(
-          session,
-          res,
-          `Perfect. I have ${sauceSummary(session.order)} and that comes with ${formatCountNoun(dips, "dipping sauce", "dipping sauces")}. Would you like ranch or blue cheese?`
-        );
-      }
-      session.stage = "combo_side";
-      return sayAndStore(
-        session,
-        res,
-        `Got it. ${session.order.quantity} ${session.order.style} wings split as ${sauceSummary(session.order)} as a combo. For the combo side, would you like regular fries, sweet potato fries, or potato salad?`
-      );
-    }
-
-    if (session.order.isCombo === null) {
-      session.stage = "combo_offer";
-      return sayAndStore(
-        session,
-        res,
-        `Got it. ${session.order.quantity} ${session.order.style} wings split as ${sauceSummary(session.order)}. Would you like to make that a combo?`
-      );
-    }
-
     session.stage = "included_dip";
     const dips = dipSlotsAllowed(session.order.quantity);
     return sayAndStore(
       session,
       res,
-      `Perfect. I have ${sauceSummary(session.order)} and that comes with ${formatCountNoun(dips, "dipping sauce", "dipping sauces")}. Would you like ranch or blue cheese?`
+      `Perfect. I have ${session.order.quantity} ${session.order.style} wings split as ${sauceSummary(session.order)}. That comes with ${formatCountNoun(dips, "dipping sauce", "dipping sauces")}. Would you like ranch or blue cheese?`
     );
   }
 
@@ -511,35 +452,12 @@ app.post("/speech", (req, res) => {
       );
     }
 
-    if (session.order.isCombo === true) {
-      if (session.order.comboSide) {
-        session.stage = "included_dip";
-        const dips = dipSlotsAllowed(session.order.quantity);
-        return sayAndStore(
-          session,
-          res,
-          `Perfect. I have ${sauceSummary(session.order)} and that comes with ${formatCountNoun(dips, "dipping sauce", "dipping sauces")}. Would you like ranch or blue cheese?`
-        );
-      }
-      session.stage = "combo_side";
-      return sayAndStore(session, res, "Perfect. For the combo side, would you like regular fries, sweet potato fries, or potato salad?");
-    }
-
-    if (session.order.isCombo === null) {
-      session.stage = "combo_offer";
-      return sayAndStore(
-        session,
-        res,
-        `Got it. ${session.order.quantity} ${session.order.style} wings split as ${sauceSummary(session.order)}. Would you like to make that a combo?`
-      );
-    }
-
     session.stage = "included_dip";
     const dips = dipSlotsAllowed(session.order.quantity);
     return sayAndStore(
       session,
       res,
-      `Perfect. I have ${sauceSummary(session.order)} and that comes with ${formatCountNoun(dips, "dipping sauce", "dipping sauces")}. Would you like ranch or blue cheese?`
+      `Perfect. I have ${session.order.quantity} ${session.order.style} wings split as ${sauceSummary(session.order)}. That comes with ${formatCountNoun(dips, "dipping sauce", "dipping sauces")}. Would you like ranch or blue cheese?`
     );
   }
 
@@ -567,98 +485,12 @@ app.post("/speech", (req, res) => {
       );
     }
 
-    if (session.order.isCombo === true) {
-      if (session.order.comboSide) {
-        session.stage = "included_dip";
-        const dips = dipSlotsAllowed(session.order.quantity);
-        return sayAndStore(
-          session,
-          res,
-          `Perfect. I have ${sauceSummary(session.order)} and that comes with ${formatCountNoun(dips, "dipping sauce", "dipping sauces")}. Would you like ranch or blue cheese?`
-        );
-      }
-      session.stage = "combo_side";
-      return sayAndStore(session, res, "Perfect. For the combo side, would you like regular fries, sweet potato fries, or potato salad?");
-    }
-
-    if (session.order.isCombo === null) {
-      session.stage = "combo_offer";
-      return sayAndStore(
-        session,
-        res,
-        `Got it. ${session.order.quantity} ${session.order.style} wings split as ${sauceSummary(session.order)}. Would you like to make that a combo?`
-      );
-    }
-
     session.stage = "included_dip";
     const dips = dipSlotsAllowed(session.order.quantity);
     return sayAndStore(
       session,
       res,
-      `Perfect. I have ${sauceSummary(session.order)} and that comes with ${formatCountNoun(dips, "dipping sauce", "dipping sauces")}. Would you like ranch or blue cheese?`
-    );
-  }
-
-  if (session.stage === "combo_offer") {
-    if (isYes(speech) || wantsCombo(speech)) {
-      session.order.isCombo = true;
-      const comboSide = extractComboSide(speech);
-      if (comboSide) session.order.comboSide = comboSide;
-
-      if (session.order.comboSide) {
-        session.stage = "included_dip";
-        const dips = dipSlotsAllowed(session.order.quantity);
-        return sayAndStore(
-          session,
-          res,
-          `Perfect. I have ${session.order.quantity} ${session.order.style} wings split as ${sauceSummary(session.order)} as a combo with ${session.order.comboSide}. That includes ${formatCountNoun(dips, "dipping sauce", "dipping sauces")}. Would you like ranch or blue cheese?`
-        );
-      }
-
-      session.stage = "combo_side";
-      return sayAndStore(session, res, "Perfect. For the combo side, would you like regular fries, sweet potato fries, or potato salad?");
-    }
-
-    if (isNo(speech)) {
-      session.order.isCombo = false;
-      session.stage = "included_dip";
-      const dips = dipSlotsAllowed(session.order.quantity);
-      return sayAndStore(
-        session,
-        res,
-        `No problem. That includes ${formatCountNoun(dips, "dipping sauce", "dipping sauces")}. Would you like ranch or blue cheese?`
-      );
-    }
-
-    const comboSide = extractComboSide(speech);
-    if (comboSide) {
-      session.order.isCombo = true;
-      session.order.comboSide = comboSide;
-      session.stage = "included_dip";
-      const dips = dipSlotsAllowed(session.order.quantity);
-      return sayAndStore(
-        session,
-        res,
-        `Perfect. I have ${session.order.quantity} ${session.order.style} wings split as ${sauceSummary(session.order)} as a combo with ${session.order.comboSide}. That includes ${formatCountNoun(dips, "dipping sauce", "dipping sauces")}. Would you like ranch or blue cheese?`
-      );
-    }
-
-    return sayAndStore(session, res, "Sorry, I missed that. Would you like to make it a combo?");
-  }
-
-  if (session.stage === "combo_side") {
-    const comboSide = extractComboSide(speech);
-    if (!comboSide) {
-      return sayAndStore(session, res, "Sorry, I missed that. For the combo side, would you like regular fries, sweet potato fries, or potato salad?");
-    }
-
-    session.order.comboSide = comboSide;
-    session.stage = "included_dip";
-    const dips = dipSlotsAllowed(session.order.quantity);
-    return sayAndStore(
-      session,
-      res,
-      `Perfect. That includes ${formatCountNoun(dips, "dipping sauce", "dipping sauces")}. Would you like ranch or blue cheese?`
+      `Perfect. I have ${session.order.quantity} ${session.order.style} wings split as ${sauceSummary(session.order)}. That comes with ${formatCountNoun(dips, "dipping sauce", "dipping sauces")}. Would you like ranch or blue cheese?`
     );
   }
 
@@ -734,7 +566,7 @@ app.post("/speech", (req, res) => {
     return sayAndStore(
       session,
       res,
-      `Perfect, ${name}. I have ${orderSummary(session.order)}. Your order is all set. Thank you for calling Flaps and Racks.`,
+      `Perfect, ${name}. I have ${orderSummary(session.order)}. Your order is all set. Thank you for calling Flaps and Racks. This is Jeffrey.`,
       true
     );
   }
@@ -744,9 +576,9 @@ app.post("/speech", (req, res) => {
 });
 
 app.get("/", (req, res) => {
-  res.send("Jeffrey AI Cashier 1.5 sauce split demo is running.");
+  res.send("Jeffrey AI Cashier is running.");
 });
 
 app.listen(PORT, () => {
-  console.log("Server running on port", PORT);
+  console.log("Jeffrey server running on port", PORT);
 });
