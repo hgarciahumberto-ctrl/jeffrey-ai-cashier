@@ -9,7 +9,8 @@ app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json());
 
 const PORT = process.env.PORT || 3000;
-const VOICE = "Polly.Matthew";
+const VOICE = process.env.TWILIO_VOICE || "Polly.Matthew";
+const LANGUAGE = "en-US";
 
 const SAUCE_ALIASES = [
   { keys: ["mild", "buffalo mild"], value: "mild" },
@@ -29,11 +30,7 @@ const SAUCE_ALIASES = [
 
 const EXTRA_SIDE_ALIASES = [
   { keys: ["fries", "regular fries", "french fries"], value: "regular fries" },
-  { keys: ["sweet potato fries", "sweet fries"], value: "sweet potato fries" },
-  { keys: ["potato salad"], value: "potato salad" },
-  { keys: ["corn ribs", "corn"], value: "corn ribs" },
-  { keys: ["mac bites", "mac bite", "mac", "mac and cheese bites"], value: "mac bites" },
-  { keys: ["mozzarella sticks", "mozz sticks", "mozzarella", "mozz"], value: "mozzarella sticks" }
+  { keys: ["mac bites", "mac bite", "mac", "mac and cheese bites"], value: "mac bites" }
 ];
 
 const DIP_ALIASES = [
@@ -48,10 +45,12 @@ function blankOrder() {
     quantity: null,
     style: null,
     sauces: [],
+    sauceMode: "split", // split | single
     includedDips: [],
     extraDips: [],
     extraSide: null,
-    name: null
+    name: null,
+    noMoreSauces: false
   };
 }
 
@@ -61,6 +60,7 @@ function getSession(callSid) {
       stage: "language",
       lastPrompt: "",
       hold: false,
+      reprompts: 0,
       order: blankOrder()
     });
   }
@@ -71,6 +71,7 @@ function resetSession(session) {
   session.stage = "language";
   session.lastPrompt = "";
   session.hold = false;
+  session.reprompts = 0;
   session.order = blankOrder();
 }
 
@@ -82,11 +83,15 @@ function normalize(text = "") {
     .trim();
 }
 
+function pick(options) {
+  return options[Math.floor(Math.random() * options.length)];
+}
+
 function speak(res, message, hangup = false) {
   const vr = new VoiceResponse();
 
   if (hangup) {
-    vr.say({ voice: VOICE }, message);
+    vr.say({ voice: VOICE, language: LANGUAGE }, message);
     vr.hangup();
   } else {
     const gather = vr.gather({
@@ -94,9 +99,10 @@ function speak(res, message, hangup = false) {
       action: "/speech",
       method: "POST",
       speechTimeout: "auto",
-      timeout: 5
+      timeout: 6,
+      actionOnEmptyResult: true
     });
-    gather.say({ voice: VOICE }, message);
+    gather.say({ voice: VOICE, language: LANGUAGE }, message);
   }
 
   res.type("text/xml").send(vr.toString());
@@ -104,7 +110,18 @@ function speak(res, message, hangup = false) {
 
 function sayAndStore(session, res, message, hangup = false) {
   session.lastPrompt = message;
+  if (!hangup) session.reprompts = 0;
   return speak(res, message, hangup);
+}
+
+function reprompt(session, res, fallback) {
+  session.reprompts += 1;
+
+  if (session.reprompts >= 2) {
+    return sayAndStore(session, res, fallback);
+  }
+
+  return speak(res, session.lastPrompt || fallback);
 }
 
 function findAlias(text, aliasList) {
@@ -130,8 +147,17 @@ function extractAllAliases(text, aliasList) {
 }
 
 function extractNumber(text) {
-  const match = text.match(/\b(6|9|12|18|24|48)\b/);
-  return match ? parseInt(match[1], 10) : null;
+  const digitMatch = text.match(/\b(6|9|12|18|24|48)\b/);
+  if (digitMatch) return parseInt(digitMatch[1], 10);
+
+  if (text.includes("six")) return 6;
+  if (text.includes("nine")) return 9;
+  if (text.includes("twelve")) return 12;
+  if (text.includes("eighteen")) return 18;
+  if (text.includes("twenty four")) return 24;
+  if (text.includes("forty eight")) return 48;
+
+  return null;
 }
 
 function extractStyle(text) {
@@ -167,8 +193,6 @@ function extractDipQty(text) {
   if (text.includes("one")) return 1;
   if (text.includes("two")) return 2;
   if (text.includes("three")) return 3;
-  if (text.includes("four")) return 4;
-  if (text.includes("five")) return 5;
 
   return 1;
 }
@@ -205,11 +229,11 @@ function formatName(name) {
 }
 
 function isYes(text) {
-  return /\b(yes|yeah|yep|sure|okay|ok|sounds good|that works)\b/.test(text);
+  return /\b(yes|yeah|yep|sure|okay|ok|sounds good|that works|go ahead)\b/.test(text);
 }
 
 function isNo(text) {
-  return /\b(no|nope|nah|nothing else|that s all|thats all|no thank you|im good|i m good|just that|keep it like that|that s fine|thats fine|just wings)\b/.test(text);
+  return /\b(no|nope|nah|nothing else|that s all|thats all|no thank you|im good|i m good|just that|keep it like that|that s fine|thats fine|just wings|i'm good|that'll be all|that will be all)\b/.test(text);
 }
 
 function wantsRepeat(text) {
@@ -232,6 +256,14 @@ function wantsChangeSauce(text) {
   return /\b(change the sauce|different sauce|switch the sauce|another sauce|make that|instead)\b/.test(text);
 }
 
+function wantsSingleSauce(text) {
+  return /\b(one sauce|just one sauce|single sauce|all one sauce|all mild|all hot|all bbq|all barbeque|all barbecue|all lime pepper|all garlic parmesan|all mango habanero|all teriyaki|all green chile|all sweet and spicy|all citrus chipotle|all bbq chiltepin|all chocolate chiltepin|all cinnamon roll)\b/.test(text);
+}
+
+function wantsAllSameDip(text) {
+  return /\b(all ranch|just ranch|all blue cheese|just blue cheese)\b/.test(text);
+}
+
 function sauceSlotsAllowed(quantity) {
   return Math.max(1, Math.floor(quantity / 6));
 }
@@ -242,28 +274,6 @@ function dipSlotsAllowed(quantity) {
 
 function formatCountNoun(count, singular, plural) {
   return `${count} ${count === 1 ? singular : plural}`;
-}
-
-function sauceCounts(order) {
-  const total = order.quantity || 0;
-  const sauces = order.sauces.length ? order.sauces : [];
-  const parts = sauces.length;
-  if (!parts) return [];
-
-  const base = Math.floor(total / parts);
-  let remainder = total % parts;
-
-  return sauces.map((sauce) => {
-    const amount = base + (remainder > 0 ? 1 : 0);
-    if (remainder > 0) remainder -= 1;
-    return { sauce, amount };
-  });
-}
-
-function sauceSummary(order) {
-  return sauceCounts(order)
-    .map(({ sauce, amount }) => `${amount} ${sauce}`)
-    .join(" and ");
 }
 
 function countByType(list) {
@@ -279,26 +289,36 @@ function dipSummary(list) {
     .join(", ");
 }
 
-function orderSummary(order) {
-  let summary = `${order.quantity} ${order.style} wings`;
+function sauceCounts(order) {
+  const total = order.quantity || 0;
+  const sauces = order.sauces.length ? order.sauces : [];
+  if (!sauces.length) return [];
 
-  if (order.sauces.length) {
-    summary += ` split as ${sauceSummary(order)}`;
+  if (order.sauceMode === "single" || sauces.length === 1) {
+    return [{ sauce: sauces[0], amount: total }];
   }
 
-  if (order.includedDips.length) {
-    summary += `, with included ${dipSummary(order.includedDips)}`;
+  const parts = sauces.length;
+  const base = Math.floor(total / parts);
+  let remainder = total % parts;
+
+  return sauces.map((sauce) => {
+    const amount = base + (remainder > 0 ? 1 : 0);
+    if (remainder > 0) remainder -= 1;
+    return { sauce, amount };
+  });
+}
+
+function sauceSummary(order) {
+  const counts = sauceCounts(order);
+
+  if (counts.length === 1 && counts[0].amount === order.quantity) {
+    return `all ${counts[0].sauce}`;
   }
 
-  if (order.extraDips.length) {
-    summary += `, plus extra ${dipSummary(order.extraDips)}`;
-  }
-
-  if (order.extraSide) {
-    summary += `, and ${order.extraSide}`;
-  }
-
-  return summary;
+  return counts
+    .map(({ sauce, amount }) => `${amount} ${sauce}`)
+    .join(" and ");
 }
 
 function parseCoreOrder(text, order) {
@@ -310,9 +330,17 @@ function parseCoreOrder(text, order) {
   if (style) order.style = style;
 
   if (sauces.length) {
-    order.sauces = [];
-    for (const sauce of sauces) {
-      if (!order.sauces.includes(sauce)) order.sauces.push(sauce);
+    if (wantsSingleSauce(text) || sauces.length === 1) {
+      order.sauces = [sauces[0]];
+      order.sauceMode = "single";
+      order.noMoreSauces = true;
+    } else {
+      order.sauces = [];
+      order.sauceMode = "split";
+      order.noMoreSauces = false;
+      for (const sauce of sauces) {
+        if (!order.sauces.includes(sauce)) order.sauces.push(sauce);
+      }
     }
   }
 }
@@ -326,14 +354,51 @@ function missingCore(order) {
 
 function nextPromptForMissing(order) {
   const missing = missingCore(order);
-  if (missing === "quantity") return "How many wings you thinking?";
-  if (missing === "style") return "Classic or boneless?";
-  if (missing === "sauce") return "What sauce you want?";
+
+  if (missing === "quantity") {
+    return pick([
+      "How many wings can I get you?",
+      "How many wings you thinking?",
+      "How many would you like?"
+    ]);
+  }
+
+  if (missing === "style") {
+    return pick([
+      "Classic or boneless?",
+      "You want classic or boneless?",
+      "Classic or boneless on that?"
+    ]);
+  }
+
+  if (missing === "sauce") {
+    return pick([
+      "What sauce you want on that?",
+      "What sauce would you like?",
+      "What flavor you want?"
+    ]);
+  }
+
   return null;
 }
 
-function addSauces(order, newSauces) {
+function addSauces(order, newSauces, originalText = "") {
   const max = sauceSlotsAllowed(order.quantity);
+
+  if (!newSauces.length) return;
+
+  if (wantsSingleSauce(originalText) || /\b(just|only|all)\b/.test(originalText) || newSauces.length === 1) {
+    order.sauces = [newSauces[0]];
+    order.sauceMode = "single";
+    order.noMoreSauces = true;
+    return;
+  }
+
+  if (order.sauceMode === "single") {
+    order.sauceMode = "split";
+    order.noMoreSauces = false;
+  }
+
   for (const sauce of newSauces) {
     if (order.sauces.length >= max) break;
     if (!order.sauces.includes(sauce)) order.sauces.push(sauce);
@@ -365,53 +430,68 @@ function handleInterruptions(session, speech, res) {
   if (wantsStartOver(speech)) {
     resetSession(session);
     session.stage = "order";
-    return sayAndStore(session, res, "No problem. Let’s start fresh. What can I get started for you?");
+    return sayAndStore(
+      session,
+      res,
+      pick([
+        "No problem. Let’s start fresh. What can I get started for you?",
+        "Alright, let’s start over. What can I get for you?",
+        "Sure thing. What can I get started for you?"
+      ])
+    );
   }
 
   if (wantsRepeat(speech)) {
-    return sayAndStore(session, res, session.lastPrompt || "Sure. What can I get started for you?");
+    return speak(res, session.lastPrompt || "Sure. What can I get started for you?");
   }
 
   if (wantsHold(speech)) {
     session.hold = true;
-    return sayAndStore(session, res, "Of course. Take your time. Just say ready when you’re set.");
+    return sayAndStore(
+      session,
+      res,
+      pick([
+        "Of course. Take your time. Just say ready when you’re set.",
+        "No problem. Just say ready when you’re good.",
+        "You got it. Say ready when you’re set."
+      ])
+    );
   }
 
   if (session.hold) {
     if (wantsResume(speech)) {
       session.hold = false;
-      return sayAndStore(session, res, "Perfect. Go ahead.");
+      return sayAndStore(session, res, pick(["Perfect. Go ahead.", "Alright, I’m ready.", "Go for it."]));
     }
-    return sayAndStore(session, res, "No rush. Just say ready when you’re set.");
+    return speak(res, "No rush. Just say ready when you’re set.");
   }
 
   if (wantsChangeSauce(speech) && session.order.quantity) {
     const newSauces = extractSauces(speech);
     session.order.sauces = [];
+    session.order.sauceMode = "split";
+    session.order.noMoreSauces = false;
+
     if (newSauces.length) {
-      addSauces(session.order, newSauces);
-      const allowed = sauceSlotsAllowed(session.order.quantity);
-
-      if (session.order.sauces.length < allowed) {
-        session.stage = "sauce_more_or_done";
-        return sayAndStore(
-          session,
-          res,
-          `Got it. Right now I have ${sauceSummary(session.order)}. Want to add another or keep it like that?`
-        );
-      }
-
-      session.stage = "included_dip";
+      addSauces(session.order, newSauces, speech);
       const dips = dipSlotsAllowed(session.order.quantity);
+      session.stage = "included_dip";
       return sayAndStore(
         session,
         res,
-        `Perfect. So I’ve got ${sauceSummary(session.order)}. That comes with ${formatCountNoun(dips, "dipping sauce", "dipping sauces")}. Ranch or blue cheese?`
+        pick([
+          `Perfect. I’ve got ${sauceSummary(session.order)}. Ranch or blue cheese with that? You get ${formatCountNoun(dips, "dip", "dips")}.`,
+          `Alright, ${sauceSummary(session.order)}. That comes with ${formatCountNoun(dips, "dip", "dips")}. Ranch or blue cheese?`
+        ])
       );
     }
 
     session.stage = "sauce";
-    return sayAndStore(session, res, "Absolutely. What sauce would you like?");
+    return sayAndStore(session, res, pick([
+      "Absolutely. What sauce you want instead?",
+      "Sure thing. What sauce would you like?",
+      "Got you. What flavor do you want instead?"
+    ]));
   }
 
   return null;
@@ -432,12 +512,32 @@ app.post("/speech", (req, res) => {
   console.log("Stage:", session.stage, "| Speech:", speech);
   console.log("Order:", JSON.stringify(session.order));
 
+  if (!speech) {
+    if (session.stage === "name") {
+      return reprompt(session, res, "Sorry, I didn’t catch the name. What name can I put that under?");
+    }
+    if (session.stage === "extra_upsell") {
+      return reprompt(session, res, "Want extra ranch or blue cheese, or maybe a side?");
+    }
+    if (session.stage === "included_dip") {
+      return reprompt(session, res, "Ranch or blue cheese with that?");
+    }
+    if (session.stage === "sauce" || session.stage === "sauce_more_or_done") {
+      return reprompt(session, res, "What sauce would you like?");
+    }
+    return reprompt(session, res, "Sorry, I missed that. What can I get started for you?");
+  }
+
   const interrupt = handleInterruptions(session, speech, res);
   if (interrupt) return interrupt;
 
   if (session.stage === "language") {
     session.stage = "order";
-    return sayAndStore(session, res, "What can I get started for you?");
+    return sayAndStore(session, res, pick([
+      "What can I get started for you?",
+      "What can I get for you today?",
+      "What are we having today?"
+    ]));
   }
 
   if (session.stage === "order") {
@@ -451,12 +551,15 @@ app.post("/speech", (req, res) => {
 
     const allowed = sauceSlotsAllowed(session.order.quantity);
 
-    if (session.order.sauces.length < allowed) {
+    if (!session.order.noMoreSauces && session.order.sauceMode !== "single" && session.order.sauces.length < allowed) {
       session.stage = "sauce_more_or_done";
       return sayAndStore(
         session,
         res,
-        `Got you. You can do up to ${allowed} sauces. Right now I have ${sauceSummary(session.order)}. Want to add another or keep it like that?`
+        pick([
+          `Got you. You can do up to ${allowed} sauces. Right now I have ${sauceSummary(session.order)}. Want to add another or keep it like that?`,
+          `Perfect. I’ve got ${sauceSummary(session.order)} so far. You can do up to ${allowed} sauces. Add another or keep it like that?`
+        ])
       );
     }
 
@@ -465,7 +568,11 @@ app.post("/speech", (req, res) => {
     return sayAndStore(
       session,
       res,
-      `Perfect. So I’ve got ${sauceSummary(session.order)}. That comes with ${formatCountNoun(dips, "dipping sauce", "dipping sauces")}. Ranch or blue cheese?`
+      pick([
+        `Perfect. I’ve got ${sauceSummary(session.order)}. Ranch or blue cheese with that? You get ${formatCountNoun(dips, "dip", "dips")}.`,
+        `Alright, ${sauceSummary(session.order)}. That comes with ${formatCountNoun(dips, "dip", "dips")}. Ranch or blue cheese?`,
+        `Got it. ${sauceSummary(session.order)}. For the dips, ranch or blue cheese? You get ${formatCountNoun(dips, "dip", "dips")}.`
+      ])
     );
   }
 
@@ -478,19 +585,28 @@ app.post("/speech", (req, res) => {
 
     const sauces = extractSauces(speech);
     if (!sauces.length) {
-      return sayAndStore(session, res, "Sorry, what sauce was that?");
+      return sayAndStore(session, res, pick([
+        "Sorry, what sauce was that?",
+        "I missed the sauce. What flavor do you want?",
+        "Sorry, which sauce did you want?"
+      ]));
     }
 
     session.order.sauces = [];
-    addSauces(session.order, sauces);
+    session.order.sauceMode = "split";
+    session.order.noMoreSauces = false;
+    addSauces(session.order, sauces, speech);
 
     const allowed = sauceSlotsAllowed(session.order.quantity);
-    if (session.order.sauces.length < allowed) {
+    if (!session.order.noMoreSauces && session.order.sauceMode !== "single" && session.order.sauces.length < allowed) {
       session.stage = "sauce_more_or_done";
       return sayAndStore(
         session,
         res,
-        `Perfect. Right now I have ${sauceSummary(session.order)}. You can do up to ${allowed} sauces. Want to add another or keep it like that?`
+        pick([
+          `Perfect. Right now I have ${sauceSummary(session.order)}. You can do up to ${allowed} sauces. Want to add another or keep it like that?`,
+          `Got it. So far I have ${sauceSummary(session.order)}. Want another sauce or keep it like that?`
+        ])
       );
     }
 
@@ -499,7 +615,10 @@ app.post("/speech", (req, res) => {
     return sayAndStore(
       session,
       res,
-      `Perfect. So I’ve got ${sauceSummary(session.order)}. That comes with ${formatCountNoun(dips, "dipping sauce", "dipping sauces")}. Ranch or blue cheese?`
+      pick([
+        `Perfect. I’ve got ${sauceSummary(session.order)}. Ranch or blue cheese with that? You get ${formatCountNoun(dips, "dip", "dips")}.`,
+        `Alright, ${sauceSummary(session.order)}. That comes with ${formatCountNoun(dips, "dip", "dips")}. Ranch or blue cheese?`
+      ])
     );
   }
 
@@ -510,11 +629,9 @@ app.post("/speech", (req, res) => {
     if (quantityCorrection && quantityCorrection !== session.order.quantity) {
       session.order.quantity = quantityCorrection;
       const allowed = sauceSlotsAllowed(session.order.quantity);
-
-      if (session.order.sauces.length > allowed) {
+      if (session.order.sauceMode !== "single" && session.order.sauces.length > allowed) {
         session.order.sauces = session.order.sauces.slice(0, allowed);
       }
-
       return sayAndStore(
         session,
         res,
@@ -528,23 +645,33 @@ app.post("/speech", (req, res) => {
       return sayAndStore(
         session,
         res,
-        `Perfect. I switched that to ${session.order.style}. Right now I have ${sauceSummary(session.order)}. Want to add another or keep it like that?`
+        pick([
+          `Perfect. I switched that to ${session.order.style}. Right now I have ${sauceSummary(session.order)}. Want to add another or keep it like that?`,
+          `Got it. ${session.order.style} now. Sauces are ${sauceSummary(session.order)}. Add another or keep it like that?`
+        ])
       );
+    }
+
+    if (isNo(speech) || speech.includes("keep")) {
+      session.order.noMoreSauces = true;
     }
 
     const sauces = extractSauces(speech);
     if (sauces.length) {
-      addSauces(session.order, sauces);
+      addSauces(session.order, sauces, speech);
     }
 
     const allowed = sauceSlotsAllowed(session.order.quantity);
 
-    if (sauces.length && session.order.sauces.length < allowed) {
+    if (!session.order.noMoreSauces && session.order.sauceMode !== "single" && sauces.length && session.order.sauces.length < allowed) {
       const remaining = allowed - session.order.sauces.length;
       return sayAndStore(
         session,
         res,
-        `Got it. I have ${sauceSummary(session.order)}. You can still add ${remaining} more sauce${remaining > 1 ? "s" : ""}, or keep it like that.`
+        pick([
+          `Got it. I have ${sauceSummary(session.order)}. You can still add ${remaining} more sauce${remaining > 1 ? "s" : ""}, or keep it like that.`,
+          `Perfect. Right now it’s ${sauceSummary(session.order)}. You can still add ${remaining} more sauce${remaining > 1 ? "s" : ""}, or leave it there.`
+        ])
       );
     }
 
@@ -552,7 +679,10 @@ app.post("/speech", (req, res) => {
       return sayAndStore(
         session,
         res,
-        `Sorry, I missed that. Right now I have ${sauceSummary(session.order)}. Want to add another or keep it like that?`
+        pick([
+          `Sorry, I missed that. Right now I have ${sauceSummary(session.order)}. Want to add another or keep it like that?`,
+          `I missed that part. Right now it’s ${sauceSummary(session.order)}. Add another or keep it like that?`
+        ])
       );
     }
 
@@ -561,7 +691,10 @@ app.post("/speech", (req, res) => {
     return sayAndStore(
       session,
       res,
-      `Perfect. So I’ve got ${sauceSummary(session.order)}. That comes with ${formatCountNoun(dips, "dipping sauce", "dipping sauces")}. Ranch or blue cheese?`
+      pick([
+        `Perfect. I’ve got ${sauceSummary(session.order)}. Ranch or blue cheese with that? You get ${formatCountNoun(dips, "dip", "dips")}.`,
+        `Alright, ${sauceSummary(session.order)}. That comes with ${formatCountNoun(dips, "dip", "dips")}. Ranch or blue cheese?`
+      ])
     );
   }
 
@@ -576,7 +709,7 @@ app.post("/speech", (req, res) => {
       return sayAndStore(
         session,
         res,
-        `Got it. That now comes with ${formatCountNoun(dipSlotsAllowed(session.order.quantity), "dipping sauce", "dipping sauces")}. Ranch or blue cheese?`
+        `Got it. That now comes with ${formatCountNoun(dipSlotsAllowed(session.order.quantity), "dip", "dips")}. Ranch or blue cheese?`
       );
     }
 
@@ -588,12 +721,19 @@ app.post("/speech", (req, res) => {
     const max = dipSlotsAllowed(session.order.quantity);
 
     if (!dips.length) {
-      return sayAndStore(session, res, `That comes with ${formatCountNoun(max, "dipping sauce", "dipping sauces")}. Ranch or blue cheese?`);
+      return sayAndStore(
+        session,
+        res,
+        pick([
+          `That comes with ${formatCountNoun(max, "dip", "dips")}. Ranch or blue cheese?`,
+          `For the dips, ranch or blue cheese? You get ${formatCountNoun(max, "dip", "dips")}.`
+        ])
+      );
     }
 
     session.order.includedDips = [];
 
-    if (dips.length === 1) {
+    if (wantsAllSameDip(speech) || dips.length === 1) {
       fillRemainingIncludedDipsWith(session.order, dips[0]);
     } else {
       addSpecificIncludedDips(session.order, dips);
@@ -610,7 +750,11 @@ app.post("/speech", (req, res) => {
     return sayAndStore(
       session,
       res,
-      `Perfect. That gives you ${dipSummary(session.order.includedDips)}. Want to add extra ranch or maybe a side like fries or mac bites?`
+      pick([
+        `Perfect. That gives you ${dipSummary(session.order.includedDips)}. Want extra ranch or maybe a side like fries or mac bites?`,
+        `Got it. I have ${dipSummary(session.order.includedDips)}. Want to add extra ranch, or maybe fries or mac bites?`,
+        `Alright. You’ve got ${dipSummary(session.order.includedDips)}. Want any extra ranch or maybe a side?`
+      ])
     );
   }
 
@@ -630,41 +774,89 @@ app.post("/speech", (req, res) => {
       return sayAndStore(
         session,
         res,
-        `Perfect. I’ve got ${session.order.extraDips.length ? `extra ${dipSummary(session.order.extraDips)}` : "that set"}. Anything else?`
+        pick([
+          `Perfect. I’ve got extra ${dipSummary(session.order.extraDips)}. Anything else?`,
+          `Got it. Added extra ${dipSummary(session.order.extraDips)}. Anything else for you?`,
+          `Alright, extra ${dipSummary(session.order.extraDips)}. Anything else?`
+        ])
       );
     }
 
     if (side) {
       session.order.extraSide = side;
       session.stage = "name";
-      return sayAndStore(session, res, `Perfect, adding ${side}. What name can I put that under?`);
+      return sayAndStore(
+        session,
+        res,
+        pick([
+          `Perfect, adding ${side}. What name can I put that under?`,
+          `Got you. I added ${side}. What name is the order under?`,
+          `Alright, ${side} added. What name can I put on it?`
+        ])
+      );
     }
 
     if (isNo(speech)) {
       session.stage = "name";
-      return sayAndStore(session, res, "Perfect. What name can I put that under?");
+      return sayAndStore(
+        session,
+        res,
+        pick([
+          "Perfect. What name can I put that under?",
+          "Sounds good. What name is the order under?",
+          "Alright. What name can I put on it?"
+        ])
+      );
     }
 
-    return sayAndStore(session, res, "Sorry, I missed that. Want extra ranch or blue cheese, or maybe a side?");
+    return sayAndStore(
+      session,
+      res,
+      pick([
+        "Sorry, I missed that. Want extra ranch or blue cheese, or maybe a side?",
+        "Sorry, do you want any extra ranch or maybe a side?",
+        "I missed that part. Extra ranch or maybe a side?"
+      ])
+    );
   }
 
   if (session.stage === "name") {
     const name = extractName(speech);
     if (!name) {
-      return sayAndStore(session, res, "Sorry, I didn’t catch the name. What name can I put that under?");
+      return sayAndStore(
+        session,
+        res,
+        pick([
+          "Sorry, I didn’t catch the name. What name can I put that under?",
+          "I missed the name. What should I put it under?",
+          "Sorry about that. What name is it under?"
+        ])
+      );
     }
 
     session.order.name = name;
     return sayAndStore(
       session,
       res,
-      `Perfect, ${name}. Your order is all set. We’ll have it ready for you shortly.`,
+      pick([
+        `Perfect, ${name}. You’re all set. We’ll have it ready for you shortly.`,
+        `Got it, ${name}. Your order’s all set. We’ll have that ready for you soon.`,
+        `Alright, ${name}. You’re good to go. We’ll have it ready shortly.`
+      ]),
       true
     );
   }
 
   session.stage = "order";
-  return sayAndStore(session, res, "Let’s get started. What can I get started for you?");
+  return sayAndStore(
+    session,
+    res,
+    pick([
+      "Let’s get started. What can I get for you?",
+      "What can I get started for you?",
+      "Go ahead, what can I get for you?"
+    ])
+  );
 });
 
 app.get("/", (req, res) => {
