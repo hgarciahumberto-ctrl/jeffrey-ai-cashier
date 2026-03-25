@@ -1,16 +1,18 @@
 import express from "express";
-import bodyParser from "body-parser";
 import twilio from "twilio";
 
-const { twiml: { VoiceResponse } } = twilio;
+const {
+  twiml: { VoiceResponse }
+} = twilio;
 
 const app = express();
-app.use(bodyParser.urlencoded({ extended: false }));
-app.use(bodyParser.json());
+app.use(express.urlencoded({ extended: false }));
+app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
 const VOICE = process.env.TWILIO_VOICE || "Polly.Matthew";
 const LANGUAGE = "en-US";
+const VAPI_WEBHOOK_SECRET = process.env.VAPI_WEBHOOK_SECRET;
 
 const SAUCE_ALIASES = [
   { keys: ["mild", "buffalo mild"], value: "mild" },
@@ -39,6 +41,7 @@ const DIP_ALIASES = [
 ];
 
 const sessions = new Map();
+const callStates = new Map();
 
 function blankOrder() {
   return {
@@ -73,6 +76,24 @@ function resetSession(session) {
   session.hold = false;
   session.reprompts = 0;
   session.order = blankOrder();
+}
+
+function getOrCreateCallState(callId) {
+  if (!callStates.has(callId)) {
+    callStates.set(callId, {
+      language: "en",
+      customerName: null,
+      items: [],
+      currentItem: null,
+      stage: "ordering",
+      flags: {
+        saucesConfirmed: false,
+        dipsOffered: false,
+        upsellOffered: false
+      }
+    });
+  }
+  return callStates.get(callId);
 }
 
 function normalize(text = "") {
@@ -497,6 +518,264 @@ function handleInterruptions(session, speech, res) {
   return null;
 }
 
+/**
+ * Vapi tool helpers
+ */
+function qtyToAllowedSauces(quantity) {
+  return Math.floor(quantity / 6);
+}
+
+function setCurrentItem(state, itemType, quantity) {
+  const allowedSauces = qtyToAllowedSauces(quantity);
+  state.currentItem = {
+    type: itemType,
+    quantity,
+    sauces: [],
+    allowedSauces,
+    dipsIncluded: allowedSauces,
+    extraDips: [],
+    side: null
+  };
+  state.flags.saucesConfirmed = false;
+  state.flags.dipsOffered = false;
+}
+
+function toolResult(name, toolCallId, result) {
+  return {
+    name,
+    toolCallId,
+    result: JSON.stringify(result)
+  };
+}
+
+/**
+ * Health route
+ */
+app.get("/", (req, res) => {
+  res.send("Jeffrey backend is running.");
+});
+
+/**
+ * Protect Vapi tool endpoint
+ */
+app.use((req, res, next) => {
+  if (req.path === "/vapi/tools") {
+    const auth = req.headers.authorization;
+
+    if (!VAPI_WEBHOOK_SECRET) {
+      console.error("Missing VAPI_WEBHOOK_SECRET in environment.");
+      return res.status(500).json({ error: "Server misconfigured" });
+    }
+
+    if (auth !== `Bearer ${VAPI_WEBHOOK_SECRET}`) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+  }
+
+  next();
+});
+
+/**
+ * Vapi tools endpoint
+ */
+app.post("/vapi/tools", async (req, res) => {
+  try {
+    console.log("Vapi tool webhook received:");
+    console.log(JSON.stringify(req.body, null, 2));
+
+    const message = req.body?.message;
+    if (!message || message.type !== "tool-calls") {
+      return res.status(200).json({ results: [] });
+    }
+
+    const callId = message.call?.id || "unknown-call";
+    const state = getOrCreateCallState(callId);
+    const results = [];
+
+    for (const tc of message.toolCallList || []) {
+      const { id: toolCallId, name, parameters = {} } = tc;
+
+      switch (name) {
+        case "start_order_item": {
+          const { itemType, quantity } = parameters;
+          setCurrentItem(state, itemType, Number(quantity));
+
+          results.push(
+            toolResult(name, toolCallId, {
+              ok: true,
+              speak: `Got you. ${quantity} ${itemType === "wings" ? "bone-in wings" : "boneless"}. You can do up to ${state.currentItem.allowedSauces} sauces. What sauces do you want?`
+            })
+          );
+          break;
+        }
+
+        case "update_quantity": {
+          const newQuantity = Number(parameters.newQuantity);
+
+          if (!state.currentItem) {
+            results.push(
+              toolResult(name, toolCallId, {
+                ok: false,
+                speak: "I missed which item we were updating. Was that bone-in or boneless?"
+              })
+            );
+            break;
+          }
+
+          state.currentItem.quantity = newQuantity;
+          state.currentItem.allowedSauces = qtyToAllowedSauces(newQuantity);
+          state.currentItem.dipsIncluded = state.currentItem.allowedSauces;
+
+          if (state.currentItem.sauces.length > state.currentItem.allowedSauces) {
+            state.currentItem.sauces = state.currentItem.sauces.slice(0, state.currentItem.allowedSauces);
+          }
+
+          results.push(
+            toolResult(name, toolCallId, {
+              ok: true,
+              speak: `Got you, switching that to ${newQuantity}. You can do up to ${state.currentItem.allowedSauces} sauces.`
+            })
+          );
+          break;
+        }
+
+        case "set_sauces": {
+          if (!state.currentItem) {
+            results.push(
+              toolResult(name, toolCallId, {
+                ok: false,
+                speak: "Let’s lock in the wing size first."
+              })
+            );
+            break;
+          }
+
+          let sauces = Array.isArray(parameters.sauces) ? parameters.sauces : [];
+          sauces = sauces.slice(0, state.currentItem.allowedSauces);
+
+          state.currentItem.sauces = sauces;
+          state.flags.saucesConfirmed = true;
+
+          results.push(
+            toolResult(name, toolCallId, {
+              ok: true,
+              speak: `Perfect. I got ${sauces.join(" and ")}. That comes with ${state.currentItem.dipsIncluded} dip${state.currentItem.dipsIncluded === 1 ? "" : "s"}. Do you want any extra ranch or other dipping sauces?`
+            })
+          );
+          break;
+        }
+
+        case "add_extra_dips": {
+          if (!state.currentItem) {
+            results.push(
+              toolResult(name, toolCallId, {
+                ok: false,
+                speak: "Let’s finish the wings first."
+              })
+            );
+            break;
+          }
+
+          const extraDips = Array.isArray(parameters.extraDips) ? parameters.extraDips : [];
+          state.currentItem.extraDips = extraDips;
+          state.flags.dipsOffered = true;
+
+          const upsellLine = state.flags.upsellOffered
+            ? "Anything else I can get for you?"
+            : "Want to add fries, mac bites, corn ribs, or mozzarella sticks?";
+
+          results.push(
+            toolResult(name, toolCallId, {
+              ok: true,
+              speak: `Got you. ${upsellLine}`
+            })
+          );
+          break;
+        }
+
+        case "add_side": {
+          if (!state.currentItem) {
+            results.push(
+              toolResult(name, toolCallId, {
+                ok: false,
+                speak: "Let’s get the main item first."
+              })
+            );
+            break;
+          }
+
+          state.currentItem.side = parameters.side || null;
+          state.flags.upsellOffered = true;
+
+          results.push(
+            toolResult(name, toolCallId, {
+              ok: true,
+              speak: "Perfect. Can I get your name for the order?"
+            })
+          );
+          break;
+        }
+
+        case "set_customer_name": {
+          state.customerName = parameters.customerName || null;
+
+          if (state.currentItem) {
+            state.items.push(state.currentItem);
+            state.currentItem = null;
+          }
+
+          const itemSummary = state.items
+            .map((item) => {
+              const base = `${item.quantity} ${item.type === "wings" ? "bone-in wings" : "boneless"}`;
+              const sauces = item.sauces.length ? `, ${item.sauces.join(" and ")}` : "";
+              const extras = item.extraDips.length ? `, extra dips: ${item.extraDips.join(" and ")}` : "";
+              const side = item.side ? `, side: ${item.side}` : "";
+              return `${base}${sauces}${extras}${side}`;
+            })
+            .join("; ");
+
+          results.push(
+            toolResult(name, toolCallId, {
+              ok: true,
+              speak: `Alright, I got you under ${state.customerName} with ${itemSummary}. Everything look right?`
+            })
+          );
+          break;
+        }
+
+        case "finalize_order": {
+          state.stage = "completed";
+
+          results.push(
+            toolResult(name, toolCallId, {
+              ok: true,
+              speak: "Perfect, we’ll have that ready for pickup. See you soon."
+            })
+          );
+          break;
+        }
+
+        default: {
+          results.push(
+            toolResult(name, toolCallId, {
+              ok: false,
+              speak: "I hit a backend tool I don’t recognize yet."
+            })
+          );
+        }
+      }
+    }
+
+    return res.status(200).json({ results });
+  } catch (error) {
+    console.error("Error in /vapi/tools:", error);
+    return res.status(200).json({ results: [] });
+  }
+});
+
+/**
+ * Existing Twilio voice routes
+ */
 app.post("/voice", (req, res) => {
   const session = getSession(req.body.CallSid);
   resetSession(session);
@@ -857,10 +1136,6 @@ app.post("/speech", (req, res) => {
       "Go ahead, what can I get for you?"
     ])
   );
-});
-
-app.get("/", (req, res) => {
-  res.send("Jeffrey AI Cashier is running.");
 });
 
 app.listen(PORT, () => {
