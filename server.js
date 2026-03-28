@@ -854,11 +854,33 @@ app.post("/vapi/tools", async (req, res) => {
     const callId = message.call?.id || "unknown-call";
     const state = getOrCreateCallState(callId);
 
-    const latestCustomerText =
-      message?.artifact?.messages?.slice?.().reverse?.().find?.((m) => m?.role === "user")?.message ||
-      message?.customer?.message ||
-      message?.transcript ||
-      "";
+    const latestCustomerText = getLatestCustomerText(message);
+
+    const latestCustomerText = getLatestCustomerText(message);
+  maybeUpdateCallLanguage(state, latestCustomerText || "");
+
+   function getLatestCustomerText(message) {
+  const msgs = message?.artifact?.messages;
+
+  if (Array.isArray(msgs)) {
+    for (let i = msgs.length - 1; i >= 0; i -= 1) {
+      const msg = msgs[i];
+      if (msg?.role === "user" && typeof msg?.message === "string") {
+        return msg.message;
+      }
+    }
+  }
+
+  if (typeof message?.customer?.message === "string") {
+    return message.customer.message;
+  }
+
+  if (typeof message?.transcript === "string") {
+    return message.transcript;
+  }
+
+  return "";
+}
 
     maybeUpdateCallLanguage(state, latestCustomerText);
 
