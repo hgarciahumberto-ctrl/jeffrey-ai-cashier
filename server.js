@@ -128,7 +128,8 @@ function detectLanguageMode(text = "") {
   const spanishSignals = [
     "hola", "quiero", "me da", "me das", "para llevar", "pedido", "orden",
     "alitas", "con hueso", "salsa", "sabor", "queso azul", "nombre",
-    "a nombre de", "ponlo a nombre de", "gracias", "si", "claro", "espanol", "español", "hablas espanol", "hablas español"
+    "a nombre de", "ponlo a nombre de", "gracias", "si", "claro",
+    "espanol", "español", "hablas espanol", "hablas español"
   ];
 
   const englishSignals = [
@@ -811,6 +812,29 @@ function summarizeItemsForCall(state) {
     .join("; ");
 }
 
+function getLatestCustomerText(message) {
+  const msgs = message?.artifact?.messages;
+
+  if (Array.isArray(msgs)) {
+    for (let i = msgs.length - 1; i >= 0; i -= 1) {
+      const msg = msgs[i];
+      if (msg?.role === "user" && typeof msg?.message === "string") {
+        return msg.message;
+      }
+    }
+  }
+
+  if (typeof message?.customer?.message === "string") {
+    return message.customer.message;
+  }
+
+  if (typeof message?.transcript === "string") {
+    return message.transcript;
+  }
+
+  return "";
+}
+
 /**
  * Health route
  */
@@ -855,34 +879,7 @@ app.post("/vapi/tools", async (req, res) => {
     const state = getOrCreateCallState(callId);
 
     const latestCustomerText = getLatestCustomerText(message);
-
-    const latestCustomerText = getLatestCustomerText(message);
-  maybeUpdateCallLanguage(state, latestCustomerText || "");
-
-   function getLatestCustomerText(message) {
-  const msgs = message?.artifact?.messages;
-
-  if (Array.isArray(msgs)) {
-    for (let i = msgs.length - 1; i >= 0; i -= 1) {
-      const msg = msgs[i];
-      if (msg?.role === "user" && typeof msg?.message === "string") {
-        return msg.message;
-      }
-    }
-  }
-
-  if (typeof message?.customer?.message === "string") {
-    return message.customer.message;
-  }
-
-  if (typeof message?.transcript === "string") {
-    return message.transcript;
-  }
-
-  return "";
-}
-
-    maybeUpdateCallLanguage(state, latestCustomerText);
+    maybeUpdateCallLanguage(state, latestCustomerText || "");
 
     const results = [];
 
