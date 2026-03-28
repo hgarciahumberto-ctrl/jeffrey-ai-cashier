@@ -10,8 +10,13 @@ app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
-const VOICE = process.env.TWILIO_VOICE || "Polly.Matthew";
-const LANGUAGE = "en-US";
+
+// Twilio legacy TTS settings
+const ENGLISH_VOICE = process.env.TWILIO_VOICE_EN || process.env.TWILIO_VOICE || "Polly.Matthew";
+const SPANISH_VOICE = process.env.TWILIO_VOICE_ES || "Polly.Mia";
+const ENGLISH_LANGUAGE = "en-US";
+const SPANISH_LANGUAGE = "es-MX";
+
 const VAPI_WEBHOOK_SECRET = process.env.VAPI_WEBHOOK_SECRET;
 
 const SAUCE_ALIASES = [
@@ -88,7 +93,7 @@ function resetSession(session) {
 function getOrCreateCallState(callId) {
   if (!callStates.has(callId)) {
     callStates.set(callId, {
-      language: "en",
+      language: "unknown",
       customerName: null,
       items: [],
       currentItem: null,
@@ -152,12 +157,38 @@ function detectLanguageMode(text = "") {
 function storeLanguageFromSpeech(session, speech) {
   const detected = detectLanguageMode(speech);
   if (detected === "unknown") return;
+
   if (session.languageMode === "unknown") {
     session.languageMode = detected;
     return;
   }
+
   if (detected === "spanglish") {
     session.languageMode = "spanglish";
+    return;
+  }
+
+  if (session.languageMode === "unknown") {
+    session.languageMode = detected;
+  }
+}
+
+function maybeUpdateCallLanguage(state, text = "") {
+  const detected = detectLanguageMode(text);
+  if (detected === "unknown") return;
+
+  if (!state.language || state.language === "unknown") {
+    state.language = detected;
+    return;
+  }
+
+  if (detected === "spanglish") {
+    state.language = "spanglish";
+    return;
+  }
+
+  if (state.language !== "spanglish") {
+    state.language = detected;
   }
 }
 
@@ -167,11 +198,25 @@ function sayByLanguage(session, english, spanish, spanglish = null) {
   return english;
 }
 
-function speak(res, message, hangup = false) {
+function sayForCall(state, english, spanish, spanglish = null) {
+  if (state.language === "es") return spanish;
+  if (state.language === "spanglish") return spanglish || english;
+  return english;
+}
+
+function getSpeechConfig(session) {
+  if (session?.languageMode === "es" || session?.languageMode === "spanglish") {
+    return { voice: SPANISH_VOICE, language: SPANISH_LANGUAGE };
+  }
+  return { voice: ENGLISH_VOICE, language: ENGLISH_LANGUAGE };
+}
+
+function speak(session, res, message, hangup = false) {
   const vr = new VoiceResponse();
+  const speechConfig = getSpeechConfig(session);
 
   if (hangup) {
-    vr.say({ voice: VOICE, language: LANGUAGE }, message);
+    vr.say(speechConfig, message);
     vr.hangup();
   } else {
     const gather = vr.gather({
@@ -182,7 +227,7 @@ function speak(res, message, hangup = false) {
       timeout: 6,
       actionOnEmptyResult: true
     });
-    gather.say({ voice: VOICE, language: LANGUAGE }, message);
+    gather.say(speechConfig, message);
   }
 
   res.type("text/xml").send(vr.toString());
@@ -191,7 +236,7 @@ function speak(res, message, hangup = false) {
 function sayAndStore(session, res, message, hangup = false) {
   session.lastPrompt = message;
   if (!hangup) session.reprompts = 0;
-  return speak(res, message, hangup);
+  return speak(session, res, message, hangup);
 }
 
 function reprompt(session, res, fallback) {
@@ -201,7 +246,7 @@ function reprompt(session, res, fallback) {
     return sayAndStore(session, res, fallback);
   }
 
-  return speak(res, session.lastPrompt || fallback);
+  return speak(session, res, session.lastPrompt || fallback);
 }
 
 function findAlias(text, aliasList) {
@@ -249,7 +294,7 @@ function extractNumber(text) {
 function extractStyle(text) {
   if (/\b(boneless)\b/.test(text)) return "boneless";
 
-  if (/\b(classic|traditional|bone in|bone-in|con hueso|alitas|clasicas|clasica|clasicas|clasicas|clásicas|clásica)\b/.test(text)) {
+  if (/\b(classic|traditional|bone in|bone-in|con hueso|alitas|clasicas|clasica|clásicas|clásica)\b/.test(text)) {
     return "classic";
   }
 
@@ -577,7 +622,11 @@ function handleInterruptions(session, speech, res) {
   }
 
   if (wantsRepeat(speech)) {
-    return speak(res, session.lastPrompt || sayByLanguage(session, "Sure. What can I get started for you?", "Claro. ¿Qué te preparo?", "Sure, ¿qué te preparo?"));
+    return speak(
+      session,
+      res,
+      session.lastPrompt || sayByLanguage(session, "Sure. What can I get started for you?", "Claro. ¿Qué te preparo?", "Sure, ¿qué te preparo?")
+    );
   }
 
   if (wantsHold(speech)) {
@@ -615,7 +664,16 @@ function handleInterruptions(session, speech, res) {
       return sayAndStore(session, res, message);
     }
 
-    return speak(res, sayByLanguage(session, "No rush. Just say ready when you’re set.", "Sin prisa. Dime listo cuando quieras seguir.", "No rush, nomás di ready cuando quieras seguir."));
+    return speak(
+      session,
+      res,
+      sayByLanguage(
+        session,
+        "No rush. Just say ready when you’re set.",
+        "Sin prisa. Dime listo cuando quieras seguir.",
+        "No rush, nomás di ready cuando quieras seguir."
+      )
+    );
   }
 
   if (wantsChangeSauce(speech) && session.order.quantity) {
@@ -706,6 +764,39 @@ function toolResult(name, toolCallId, result) {
   };
 }
 
+function itemTypeLabel(itemType, lang) {
+  if (lang === "es") {
+    return itemType === "wings" ? "alitas con hueso" : "boneless";
+  }
+  return itemType === "wings" ? "bone-in wings" : "boneless";
+}
+
+function summarizeItemsForCall(state) {
+  const lang = state.language === "es" ? "es" : "en";
+
+  return state.items
+    .map((item) => {
+      const base = `${item.quantity} ${itemTypeLabel(item.type, lang)}`;
+      const sauces = item.sauces.length
+        ? lang === "es"
+          ? `, salsas: ${item.sauces.join(" y ")}`
+          : `, ${item.sauces.join(" and ")}`
+        : "";
+      const extras = item.extraDips.length
+        ? lang === "es"
+          ? `, dips extra: ${item.extraDips.join(" y ")}`
+          : `, extra dips: ${item.extraDips.join(" and ")}`
+        : "";
+      const side = item.side
+        ? lang === "es"
+          ? `, side: ${item.side}`
+          : `, side: ${item.side}`
+        : "";
+      return `${base}${sauces}${extras}${side}`;
+    })
+    .join("; ");
+}
+
 /**
  * Health route
  */
@@ -748,6 +839,15 @@ app.post("/vapi/tools", async (req, res) => {
 
     const callId = message.call?.id || "unknown-call";
     const state = getOrCreateCallState(callId);
+
+    const latestCustomerText =
+      message?.artifact?.messages?.slice?.().reverse?.().find?.((m) => m?.role === "user")?.message ||
+      message?.customer?.message ||
+      message?.transcript ||
+      "";
+
+    maybeUpdateCallLanguage(state, latestCustomerText);
+
     const results = [];
 
     for (const tc of message.toolCallList || []) {
@@ -761,7 +861,12 @@ app.post("/vapi/tools", async (req, res) => {
           results.push(
             toolResult(name, toolCallId, {
               ok: true,
-              speak: `Got you. ${quantity} ${itemType === "wings" ? "bone-in wings" : "boneless"}. You can do up to ${state.currentItem.allowedSauces} sauces. What sauces do you want?`
+              speak: sayForCall(
+                state,
+                `Got you. ${quantity} ${itemType === "wings" ? "bone-in wings" : "boneless"}. You can do up to ${state.currentItem.allowedSauces} sauces. What sauces do you want?`,
+                `Perfecto. ${quantity} ${itemType === "wings" ? "alitas con hueso" : "boneless"}. Puedes escoger hasta ${state.currentItem.allowedSauces} salsas. ¿Qué salsas quieres?`,
+                `Perfecto. ${quantity} ${itemType === "wings" ? "bone-in wings" : "boneless"}. Puedes escoger hasta ${state.currentItem.allowedSauces} sauces. ¿Qué sauces quieres?`
+              )
             })
           );
           break;
@@ -774,7 +879,12 @@ app.post("/vapi/tools", async (req, res) => {
             results.push(
               toolResult(name, toolCallId, {
                 ok: false,
-                speak: "I missed which item we were updating. Was that bone-in or boneless?"
+                speak: sayForCall(
+                  state,
+                  "I missed which item we were updating. Was that bone-in or boneless?",
+                  "No alcancé cuál artículo estábamos cambiando. ¿Era con hueso o boneless?",
+                  "I missed which item estábamos cambiando. ¿Era bone-in o boneless?"
+                )
               })
             );
             break;
@@ -791,7 +901,12 @@ app.post("/vapi/tools", async (req, res) => {
           results.push(
             toolResult(name, toolCallId, {
               ok: true,
-              speak: `Got you, switching that to ${newQuantity}. You can do up to ${state.currentItem.allowedSauces} sauces.`
+              speak: sayForCall(
+                state,
+                `Got you, switching that to ${newQuantity}. You can do up to ${state.currentItem.allowedSauces} sauces.`,
+                `Muy bien, lo cambio a ${newQuantity}. Puedes escoger hasta ${state.currentItem.allowedSauces} salsas.`,
+                `Got you, lo cambio a ${newQuantity}. Puedes escoger hasta ${state.currentItem.allowedSauces} sauces.`
+              )
             })
           );
           break;
@@ -802,7 +917,12 @@ app.post("/vapi/tools", async (req, res) => {
             results.push(
               toolResult(name, toolCallId, {
                 ok: false,
-                speak: "Let’s lock in the wing size first."
+                speak: sayForCall(
+                  state,
+                  "Let’s lock in the wing size first.",
+                  "Primero hay que confirmar el tamaño de las alitas.",
+                  "First hay que confirmar el tamaño de las alitas."
+                )
               })
             );
             break;
@@ -817,7 +937,12 @@ app.post("/vapi/tools", async (req, res) => {
           results.push(
             toolResult(name, toolCallId, {
               ok: true,
-              speak: `Perfect. I got ${sauces.join(" and ")}. That comes with ${state.currentItem.dipsIncluded} dip${state.currentItem.dipsIncluded === 1 ? "" : "s"}. Do you want any extra ranch or other dipping sauces?`
+              speak: sayForCall(
+                state,
+                `Perfect. I got ${sauces.join(" and ")}. That comes with ${state.currentItem.dipsIncluded} dip${state.currentItem.dipsIncluded === 1 ? "" : "s"}. Do you want any extra ranch or other dipping sauces?`,
+                `Perfecto. Tengo ${sauces.join(" y ")}. Eso incluye ${state.currentItem.dipsIncluded} dip${state.currentItem.dipsIncluded === 1 ? "" : "s"}. ¿Quieres ranch extra u otra salsa para dipear?`,
+                `Perfecto. I got ${sauces.join(" y ")}. Eso incluye ${state.currentItem.dipsIncluded} dip${state.currentItem.dipsIncluded === 1 ? "" : "s"}. ¿Quieres extra ranch o alguna otra dipping sauce?`
+              )
             })
           );
           break;
@@ -828,7 +953,12 @@ app.post("/vapi/tools", async (req, res) => {
             results.push(
               toolResult(name, toolCallId, {
                 ok: false,
-                speak: "Let’s finish the wings first."
+                speak: sayForCall(
+                  state,
+                  "Let’s finish the wings first.",
+                  "Primero terminemos las alitas.",
+                  "First terminemos las alitas."
+                )
               })
             );
             break;
@@ -839,13 +969,28 @@ app.post("/vapi/tools", async (req, res) => {
           state.flags.dipsOffered = true;
 
           const upsellLine = state.flags.upsellOffered
-            ? "Anything else I can get for you?"
-            : "Want to add fries, mac bites, corn ribs, or mozzarella sticks?";
+            ? sayForCall(
+                state,
+                "Anything else I can get for you?",
+                "¿Algo más te agrego?",
+                "Anything else te agrego?"
+              )
+            : sayForCall(
+                state,
+                "Want to add fries, mac bites, corn ribs, or mozzarella sticks?",
+                "¿Quieres agregar papas, mac bites, corn ribs o mozzarella sticks?",
+                "¿Quieres agregar fries, mac bites, corn ribs o mozzarella sticks?"
+              );
 
           results.push(
             toolResult(name, toolCallId, {
               ok: true,
-              speak: `Got you. ${upsellLine}`
+              speak: sayForCall(
+                state,
+                `Got you. ${upsellLine}`,
+                `Perfecto. ${upsellLine}`,
+                `Perfecto. ${upsellLine}`
+              )
             })
           );
           break;
@@ -856,7 +1001,12 @@ app.post("/vapi/tools", async (req, res) => {
             results.push(
               toolResult(name, toolCallId, {
                 ok: false,
-                speak: "Let’s get the main item first."
+                speak: sayForCall(
+                  state,
+                  "Let’s get the main item first.",
+                  "Primero vamos con el artículo principal.",
+                  "First vamos con el artículo principal."
+                )
               })
             );
             break;
@@ -868,7 +1018,12 @@ app.post("/vapi/tools", async (req, res) => {
           results.push(
             toolResult(name, toolCallId, {
               ok: true,
-              speak: "Perfect. Can I get your name for the order?"
+              speak: sayForCall(
+                state,
+                "Perfect. Can I get your name for the order?",
+                "Perfecto. ¿A nombre de quién pongo la orden?",
+                "Perfecto. What name le pongo a la orden?"
+              )
             })
           );
           break;
@@ -882,20 +1037,17 @@ app.post("/vapi/tools", async (req, res) => {
             state.currentItem = null;
           }
 
-          const itemSummary = state.items
-            .map((item) => {
-              const base = `${item.quantity} ${item.type === "wings" ? "bone-in wings" : "boneless"}`;
-              const sauces = item.sauces.length ? `, ${item.sauces.join(" and ")}` : "";
-              const extras = item.extraDips.length ? `, extra dips: ${item.extraDips.join(" and ")}` : "";
-              const side = item.side ? `, side: ${item.side}` : "";
-              return `${base}${sauces}${extras}${side}`;
-            })
-            .join("; ");
+          const itemSummary = summarizeItemsForCall(state);
 
           results.push(
             toolResult(name, toolCallId, {
               ok: true,
-              speak: `Alright, I got you under ${state.customerName} with ${itemSummary}. Everything look right?`
+              speak: sayForCall(
+                state,
+                `Alright, I got you under ${state.customerName} with ${itemSummary}. Everything look right?`,
+                `Muy bien, quedó a nombre de ${state.customerName} con ${itemSummary}. ¿Todo se ve bien?`,
+                `Alright, quedó a nombre de ${state.customerName} con ${itemSummary}. Everything look right?`
+              )
             })
           );
           break;
@@ -906,7 +1058,12 @@ app.post("/vapi/tools", async (req, res) => {
           results.push(
             toolResult(name, toolCallId, {
               ok: true,
-              speak: "Perfect, we’ll have that ready for pickup. See you soon."
+              speak: sayForCall(
+                state,
+                "Perfect, we’ll have that ready for pickup. See you soon.",
+                "Perfecto, tendremos tu orden lista para recoger. Gracias.",
+                "Perfecto, we’ll have that ready for pickup. Gracias."
+              )
             })
           );
           break;
@@ -916,7 +1073,12 @@ app.post("/vapi/tools", async (req, res) => {
           results.push(
             toolResult(name, toolCallId, {
               ok: false,
-              speak: "I hit a backend tool I don’t recognize yet."
+              speak: sayForCall(
+                state,
+                "I hit a backend tool I don’t recognize yet.",
+                "Me cayó una herramienta del backend que todavía no reconozco.",
+                "Me cayó un backend tool que todavía no reconozco."
+              )
             })
           );
         }
@@ -938,7 +1100,7 @@ app.post("/voice", (req, res) => {
   resetSession(session);
   session.stage = "language";
   session.lastPrompt = "Thank you for calling Flaps and Racks. This is Jeffrey. English or Spanish?";
-  return speak(res, "Thank you for calling Flaps and Racks. This is Jeffrey. English or Spanish?");
+  return speak(session, res, "Thank you for calling Flaps and Racks. This is Jeffrey. English or Spanish?");
 });
 
 app.post("/speech", (req, res) => {
