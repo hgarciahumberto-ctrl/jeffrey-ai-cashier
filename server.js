@@ -15,29 +15,34 @@ const LANGUAGE = "en-US";
 const VAPI_WEBHOOK_SECRET = process.env.VAPI_WEBHOOK_SECRET;
 
 const SAUCE_ALIASES = [
-  { keys: ["mild", "buffalo mild"], value: "mild" },
-  { keys: ["hot", "buffalo hot"], value: "hot" },
-  { keys: ["lime pepper", "lemon pepper"], value: "lime pepper" },
-  { keys: ["garlic parmesan", "garlic parm", "parmesan"], value: "garlic parmesan" },
+  { keys: ["mild", "buffalo mild", "suave"], value: "mild" },
+  { keys: ["hot", "buffalo hot", "picosa", "picante"], value: "hot" },
+  { keys: ["lime pepper", "lemon pepper", "limon pepper", "limon pimienta", "limón pimienta"], value: "lime pepper" },
+  { keys: ["garlic parmesan", "garlic parm", "garlic parme", "parm", "parmesan", "ajo parmesano"], value: "garlic parmesan" },
   { keys: ["mango habanero"], value: "mango habanero" },
   { keys: ["teriyaki"], value: "teriyaki" },
-  { keys: ["barbecue", "barbeque", "bbq"], value: "barbeque" },
-  { keys: ["green chile", "green chili"], value: "green chile" },
-  { keys: ["sweet and spicy", "sweet & spicy"], value: "sweet and spicy" },
-  { keys: ["citrus chipotle"], value: "citrus chipotle" },
-  { keys: ["bbq chiltepin"], value: "bbq chiltepin" },
+  { keys: ["barbecue", "barbeque", "bbq", "barbacoa"], value: "barbeque" },
+  { keys: ["green chile", "green chili", "chile verde"], value: "green chile" },
+  { keys: ["sweet and spicy", "sweet & spicy", "dulce y picosa", "dulce y picante"], value: "sweet and spicy" },
+  { keys: ["citrus chipotle", "chipotle citrico", "chipotle cítrico"], value: "citrus chipotle" },
+  { keys: ["bbq chiltepin", "barbecue chiltepin", "barbeque chiltepin", "barbacoa chiltepin"], value: "bbq chiltepin" },
   { keys: ["chocolate chiltepin"], value: "chocolate chiltepin" },
-  { keys: ["cinnamon roll"], value: "cinnamon roll" }
+  { keys: ["cinnamon roll", "canela"], value: "cinnamon roll" }
 ];
 
 const EXTRA_SIDE_ALIASES = [
-  { keys: ["fries", "regular fries", "french fries"], value: "regular fries" },
-  { keys: ["mac bites", "mac bite", "mac", "mac and cheese bites"], value: "mac bites" }
+  { keys: ["fries", "regular fries", "french fries", "papas", "papas fritas"], value: "regular fries" },
+  { keys: ["mac bites", "mac bite", "mac", "mac and cheese bites", "mac n cheese bites"], value: "mac bites" },
+  { keys: ["corn ribs", "elote ribs", "costillas de elote", "elote"], value: "corn ribs" },
+  { keys: ["mozzarella sticks", "mozzarella", "dedos de mozzarella", "queso mozzarella"], value: "mozzarella sticks" },
+  { keys: ["onion rings", "aros de cebolla"], value: "onion rings" }
 ];
 
 const DIP_ALIASES = [
   { keys: ["ranch"], value: "ranch" },
-  { keys: ["blue cheese", "bleu cheese"], value: "blue cheese" }
+  { keys: ["blue cheese", "bleu cheese", "queso azul"], value: "blue cheese" },
+  { keys: ["chipotle ranch", "ranch chipotle"], value: "chipotle ranch" },
+  { keys: ["jalapeno ranch", "jalapeño ranch", "ranch jalapeno", "ranch jalapeño"], value: "jalapeño ranch" }
 ];
 
 const sessions = new Map();
@@ -48,7 +53,7 @@ function blankOrder() {
     quantity: null,
     style: null,
     sauces: [],
-    sauceMode: "split", // split | single
+    sauceMode: "split",
     includedDips: [],
     extraDips: [],
     extraSide: null,
@@ -61,6 +66,7 @@ function getSession(callSid) {
   if (!sessions.has(callSid)) {
     sessions.set(callSid, {
       stage: "language",
+      languageMode: "unknown",
       lastPrompt: "",
       hold: false,
       reprompts: 0,
@@ -72,6 +78,7 @@ function getSession(callSid) {
 
 function resetSession(session) {
   session.stage = "language";
+  session.languageMode = "unknown";
   session.lastPrompt = "";
   session.hold = false;
   session.reprompts = 0;
@@ -99,6 +106,8 @@ function getOrCreateCallState(callId) {
 function normalize(text = "") {
   return text
     .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
     .replace(/[.,!?]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
@@ -106,6 +115,56 @@ function normalize(text = "") {
 
 function pick(options) {
   return options[Math.floor(Math.random() * options.length)];
+}
+
+function detectLanguageMode(text = "") {
+  const input = normalize(text);
+
+  const spanishSignals = [
+    "hola", "quiero", "me da", "me das", "para llevar", "pedido", "orden",
+    "alitas", "con hueso", "salsa", "sabor", "queso azul", "nombre",
+    "a nombre de", "ponlo a nombre de", "gracias", "si", "claro"
+  ];
+
+  const englishSignals = [
+    "hi", "hello", "can i get", "i want", "to go", "order",
+    "wings", "bone in", "sauce", "flavor", "blue cheese", "name",
+    "put it under", "thank you", "yes", "sure"
+  ];
+
+  let spanishCount = 0;
+  let englishCount = 0;
+
+  for (const word of spanishSignals) {
+    if (input.includes(word)) spanishCount += 1;
+  }
+
+  for (const word of englishSignals) {
+    if (input.includes(word)) englishCount += 1;
+  }
+
+  if (spanishCount >= 2 && englishCount >= 2) return "spanglish";
+  if (spanishCount > englishCount) return "es";
+  if (englishCount > spanishCount) return "en";
+  return "unknown";
+}
+
+function storeLanguageFromSpeech(session, speech) {
+  const detected = detectLanguageMode(speech);
+  if (detected === "unknown") return;
+  if (session.languageMode === "unknown") {
+    session.languageMode = detected;
+    return;
+  }
+  if (detected === "spanglish") {
+    session.languageMode = "spanglish";
+  }
+}
+
+function sayByLanguage(session, english, spanish, spanglish = null) {
+  if (session.languageMode === "es") return spanish;
+  if (session.languageMode === "spanglish") return spanglish || english;
+  return english;
 }
 
 function speak(res, message, hangup = false) {
@@ -148,7 +207,7 @@ function reprompt(session, res, fallback) {
 function findAlias(text, aliasList) {
   for (const item of aliasList) {
     for (const key of item.keys) {
-      if (text.includes(key)) return item.value;
+      if (text.includes(normalize(key))) return item.value;
     }
   }
   return null;
@@ -158,7 +217,7 @@ function extractAllAliases(text, aliasList) {
   const found = [];
   for (const item of aliasList) {
     for (const key of item.keys) {
-      if (text.includes(key)) {
+      if (text.includes(normalize(key))) {
         if (!found.includes(item.value)) found.push(item.value);
         break;
       }
@@ -171,27 +230,29 @@ function extractNumber(text) {
   const digitMatch = text.match(/\b(6|9|12|18|24|48)\b/);
   if (digitMatch) return parseInt(digitMatch[1], 10);
 
-  if (text.includes("six")) return 6;
-  if (text.includes("nine")) return 9;
-  if (text.includes("twelve")) return 12;
-  if (text.includes("eighteen")) return 18;
-  if (text.includes("twenty four")) return 24;
-  if (text.includes("forty eight")) return 48;
+  const patterns = [
+    { re: /\b(six|seis)\b/, value: 6 },
+    { re: /\b(nine|nueve)\b/, value: 9 },
+    { re: /\b(twelve|doce)\b/, value: 12 },
+    { re: /\b(eighteen|dieciocho)\b/, value: 18 },
+    { re: /\b(twenty[\s-]?four|veinticuatro)\b/, value: 24 },
+    { re: /\b(forty[\s-]?eight|cuarenta y ocho)\b/, value: 48 }
+  ];
+
+  for (const p of patterns) {
+    if (p.re.test(text)) return p.value;
+  }
 
   return null;
 }
 
 function extractStyle(text) {
-  if (text.includes("boneless")) return "boneless";
-  if (
-    text.includes("classic") ||
-    text.includes("traditional") ||
-    text.includes("bone in") ||
-    text.includes("bone-in") ||
-    text.includes("bone")
-  ) {
+  if (/\b(boneless)\b/.test(text)) return "boneless";
+
+  if (/\b(classic|traditional|bone in|bone-in|con hueso|alitas|clasicas|clasica|clasicas|clasicas|clásicas|clásica)\b/.test(text)) {
     return "classic";
   }
+
   return null;
 }
 
@@ -211,9 +272,9 @@ function extractDipQty(text) {
   const digitMatch = text.match(/\b(\d+)\b/);
   if (digitMatch) return parseInt(digitMatch[1], 10);
 
-  if (text.includes("one")) return 1;
-  if (text.includes("two")) return 2;
-  if (text.includes("three")) return 3;
+  if (text.includes("one") || text.includes("uno") || text.includes("una")) return 1;
+  if (text.includes("two") || text.includes("dos")) return 2;
+  if (text.includes("three") || text.includes("tres")) return 3;
 
   return 1;
 }
@@ -227,7 +288,11 @@ function extractName(text) {
     /it is (.+)/i,
     /this is (.+)/i,
     /under (.+)/i,
-    /put it under (.+)/i
+    /put it under (.+)/i,
+    /mi nombre es (.+)/i,
+    /soy (.+)/i,
+    /a nombre de (.+)/i,
+    /ponlo a nombre de (.+)/i
   ];
 
   for (const p of patterns) {
@@ -235,7 +300,7 @@ function extractName(text) {
     if (m && m[1]) return formatName(m[1]);
   }
 
-  if (/^[a-zA-Z\s'-]{2,30}$/.test(cleaned)) {
+  if (/^[a-zA-ZÀ-ÿ\s'-]{2,30}$/.test(cleaned)) {
     return formatName(cleaned);
   }
 
@@ -250,39 +315,39 @@ function formatName(name) {
 }
 
 function isYes(text) {
-  return /\b(yes|yeah|yep|sure|okay|ok|sounds good|that works|go ahead)\b/.test(text);
+  return /\b(yes|yeah|yep|sure|okay|ok|sounds good|that works|go ahead|correct|si|correcto|claro|dale|esta bien|asi es|sale|va)\b/.test(text);
 }
 
 function isNo(text) {
-  return /\b(no|nope|nah|nothing else|that s all|thats all|no thank you|im good|i m good|just that|keep it like that|that s fine|thats fine|just wings|i'm good|that'll be all|that will be all)\b/.test(text);
+  return /\b(no|nope|nah|nothing else|that s all|thats all|no thank you|im good|i m good|just that|keep it like that|that s fine|thats fine|thatll be all|that ll be all|nada mas|solo eso|asi dejalo|esta bien asi|con eso|nomas eso|no gracias)\b/.test(text);
 }
 
 function wantsRepeat(text) {
-  return /\b(repeat|say that again|again|what was that|come again)\b/.test(text);
+  return /\b(repeat|say that again|again|what was that|come again|repite|otra vez)\b/.test(text);
 }
 
 function wantsHold(text) {
-  return /\b(wait|hold on|one second|one sec|just a second|give me a second)\b/.test(text);
+  return /\b(wait|hold on|one second|one sec|just a second|give me a second|espera|un segundo|tantito)\b/.test(text);
 }
 
 function wantsResume(text) {
-  return /\b(ready|go ahead|continue|okay|ok|i m ready|im ready)\b/.test(text);
+  return /\b(ready|go ahead|continue|okay|ok|i m ready|im ready|listo|lista|dale|continua)\b/.test(text);
 }
 
 function wantsStartOver(text) {
-  return /\b(start over|restart|begin again|let s start over|lets start over)\b/.test(text);
+  return /\b(start over|restart|begin again|let s start over|lets start over|empezar de nuevo|otra vez desde el principio)\b/.test(text);
 }
 
 function wantsChangeSauce(text) {
-  return /\b(change the sauce|different sauce|switch the sauce|another sauce|make that|instead)\b/.test(text);
+  return /\b(change the sauce|different sauce|switch the sauce|another sauce|make that|instead|cambia la salsa|otra salsa|mejor)\b/.test(text);
 }
 
 function wantsSingleSauce(text) {
-  return /\b(one sauce|just one sauce|single sauce|all one sauce|all mild|all hot|all bbq|all barbeque|all barbecue|all lime pepper|all garlic parmesan|all mango habanero|all teriyaki|all green chile|all sweet and spicy|all citrus chipotle|all bbq chiltepin|all chocolate chiltepin|all cinnamon roll)\b/.test(text);
+  return /\b(one sauce|just one sauce|single sauce|all one sauce|all mild|all hot|all bbq|all barbeque|all barbecue|all lime pepper|all garlic parmesan|all mango habanero|all teriyaki|all green chile|all sweet and spicy|all citrus chipotle|all bbq chiltepin|all chocolate chiltepin|all cinnamon roll|una salsa|solo una salsa|todas igual)\b/.test(text);
 }
 
 function wantsAllSameDip(text) {
-  return /\b(all ranch|just ranch|all blue cheese|just blue cheese)\b/.test(text);
+  return /\b(all ranch|just ranch|all blue cheese|just blue cheese|todo ranch|todo queso azul|solo ranch|solo queso azul)\b/.test(text);
 }
 
 function sauceSlotsAllowed(quantity) {
@@ -373,31 +438,70 @@ function missingCore(order) {
   return null;
 }
 
-function nextPromptForMissing(order) {
+function nextPromptForMissing(session, order) {
   const missing = missingCore(order);
 
   if (missing === "quantity") {
-    return pick([
-      "How many wings can I get you?",
-      "How many wings you thinking?",
-      "How many would you like?"
-    ]);
+    return sayByLanguage(
+      session,
+      pick([
+        "How many wings can I get you?",
+        "How many wings you thinking?",
+        "How many would you like?"
+      ]),
+      pick([
+        "¿Cuántas alitas quieres?",
+        "¿Cuántas te preparo?",
+        "¿Cuántas quieres?"
+      ]),
+      pick([
+        "How many wings te preparo?",
+        "How many quieres?",
+        "How many would you like?"
+      ])
+    );
   }
 
   if (missing === "style") {
-    return pick([
-      "Classic or boneless?",
-      "You want classic or boneless?",
-      "Classic or boneless on that?"
-    ]);
+    return sayByLanguage(
+      session,
+      pick([
+        "Classic or boneless?",
+        "You want classic or boneless?",
+        "Classic or boneless on that?"
+      ]),
+      pick([
+        "¿Clásicas o boneless?",
+        "¿Las quieres clásicas o boneless?",
+        "¿Con hueso o boneless?"
+      ]),
+      pick([
+        "Classic o boneless?",
+        "You want clásicas o boneless?",
+        "Bone-in o boneless?"
+      ])
+    );
   }
 
   if (missing === "sauce") {
-    return pick([
-      "What sauce you want on that?",
-      "What sauce would you like?",
-      "What flavor you want?"
-    ]);
+    return sayByLanguage(
+      session,
+      pick([
+        "What sauce you want on that?",
+        "What sauce would you like?",
+        "What flavor you want?"
+      ]),
+      pick([
+        "¿Qué salsa quieres?",
+        "¿Qué sabor quieres?",
+        "¿Qué salsas quieres?"
+      ]),
+      pick([
+        "What sauce quieres?",
+        "Qué flavor quieres?",
+        "What sauces do you want?"
+      ])
+    );
   }
 
   return null;
@@ -408,7 +512,7 @@ function addSauces(order, newSauces, originalText = "") {
 
   if (!newSauces.length) return;
 
-  if (wantsSingleSauce(originalText) || /\b(just|only|all)\b/.test(originalText) || newSauces.length === 1) {
+  if (wantsSingleSauce(originalText) || /\b(just|only|all|solo|una)\b/.test(originalText) || newSauces.length === 1) {
     order.sauces = [newSauces[0]];
     order.sauceMode = "single";
     order.noMoreSauces = true;
@@ -451,40 +555,67 @@ function handleInterruptions(session, speech, res) {
   if (wantsStartOver(speech)) {
     resetSession(session);
     session.stage = "order";
-    return sayAndStore(
+    const message = sayByLanguage(
       session,
-      res,
       pick([
         "No problem. Let’s start fresh. What can I get started for you?",
         "Alright, let’s start over. What can I get for you?",
         "Sure thing. What can I get started for you?"
+      ]),
+      pick([
+        "No hay problema. Empezamos de nuevo. ¿Qué te preparo?",
+        "Claro. Vamos de nuevo. ¿Qué te doy?",
+        "Perfecto. Empezamos otra vez. ¿Qué te preparo?"
+      ]),
+      pick([
+        "No problem, empezamos de nuevo. What can I get for you?",
+        "Alright, vamos otra vez. ¿Qué te preparo?",
+        "Sure, empezamos fresh. What can I get started for you?"
       ])
     );
+    return sayAndStore(session, res, message);
   }
 
   if (wantsRepeat(speech)) {
-    return speak(res, session.lastPrompt || "Sure. What can I get started for you?");
+    return speak(res, session.lastPrompt || sayByLanguage(session, "Sure. What can I get started for you?", "Claro. ¿Qué te preparo?", "Sure, ¿qué te preparo?"));
   }
 
   if (wantsHold(speech)) {
     session.hold = true;
-    return sayAndStore(
+    const message = sayByLanguage(
       session,
-      res,
       pick([
         "Of course. Take your time. Just say ready when you’re set.",
         "No problem. Just say ready when you’re good.",
         "You got it. Say ready when you’re set."
+      ]),
+      pick([
+        "Claro. Tómate tu tiempo. Nomás dime listo cuando estés.",
+        "Sin problema. Dime listo cuando quieras seguir.",
+        "Claro. Aquí te espero. Dime listo cuando estés."
+      ]),
+      pick([
+        "Of course, tómate tu tiempo. Just say ready when you’re set.",
+        "No problem, dime listo when you’re good.",
+        "You got it, nomás di ready when you’re set."
       ])
     );
+    return sayAndStore(session, res, message);
   }
 
   if (session.hold) {
     if (wantsResume(speech)) {
       session.hold = false;
-      return sayAndStore(session, res, pick(["Perfect. Go ahead.", "Alright, I’m ready.", "Go for it."]));
+      const message = sayByLanguage(
+        session,
+        pick(["Perfect. Go ahead.", "Alright, I’m ready.", "Go for it."]),
+        pick(["Perfecto. Adelante.", "Listo. Dime.", "Muy bien. Adelante."]),
+        pick(["Perfecto. Go ahead.", "Alright, dime.", "Go for it."])
+      );
+      return sayAndStore(session, res, message);
     }
-    return speak(res, "No rush. Just say ready when you’re set.");
+
+    return speak(res, sayByLanguage(session, "No rush. Just say ready when you’re set.", "Sin prisa. Dime listo cuando quieras seguir.", "No rush, nomás di ready cuando quieras seguir."));
   }
 
   if (wantsChangeSauce(speech) && session.order.quantity) {
@@ -497,22 +628,49 @@ function handleInterruptions(session, speech, res) {
       addSauces(session.order, newSauces, speech);
       const dips = dipSlotsAllowed(session.order.quantity);
       session.stage = "included_dip";
-      return sayAndStore(
+
+      const message = sayByLanguage(
         session,
-        res,
         pick([
           `Perfect. I’ve got ${sauceSummary(session.order)}. Ranch or blue cheese with that? You get ${formatCountNoun(dips, "dip", "dips")}.`,
           `Alright, ${sauceSummary(session.order)}. That comes with ${formatCountNoun(dips, "dip", "dips")}. Ranch or blue cheese?`
+        ]),
+        pick([
+          `Perfecto. Tengo ${sauceSummary(session.order)}. ¿Ranch o queso azul? Incluye ${formatCountNoun(dips, "dip", "dips")}.`,
+          `Muy bien. Va ${sauceSummary(session.order)}. Eso incluye ${formatCountNoun(dips, "dip", "dips")}. ¿Ranch o queso azul?`
+        ]),
+        pick([
+          `Perfecto. I’ve got ${sauceSummary(session.order)}. ¿Ranch o blue cheese? You get ${formatCountNoun(dips, "dip", "dips")}.`,
+          `Alright, ${sauceSummary(session.order)}. Eso incluye ${formatCountNoun(dips, "dip", "dips")}. Ranch o blue cheese?`
         ])
       );
+
+      return sayAndStore(session, res, message);
     }
 
     session.stage = "sauce";
-    return sayAndStore(session, res, pick([
-      "Absolutely. What sauce you want instead?",
-      "Sure thing. What sauce would you like?",
-      "Got you. What flavor do you want instead?"
-    ]));
+    return sayAndStore(
+      session,
+      res,
+      sayByLanguage(
+        session,
+        pick([
+          "Absolutely. What sauce you want instead?",
+          "Sure thing. What sauce would you like?",
+          "Got you. What flavor do you want instead?"
+        ]),
+        pick([
+          "Claro. ¿Qué salsa quieres mejor?",
+          "Sí. ¿Qué sabor quieres ahora?",
+          "Sin problema. ¿Qué salsa quieres en lugar de esa?"
+        ]),
+        pick([
+          "Absolutely. ¿Qué sauce quieres mejor?",
+          "Got you. What flavor quieres ahora?",
+          "Sure thing. ¿Qué salsa quieres instead?"
+        ])
+      )
+    );
   }
 
   return null;
@@ -610,7 +768,7 @@ app.post("/vapi/tools", async (req, res) => {
         }
 
         case "update_quantity": {
-          const newQuantity = Number(parameters.newQuantity);
+          const newQuantity = Number(parameters.newQuantity || parameters.quantity);
 
           if (!state.currentItem) {
             results.push(
@@ -745,7 +903,6 @@ app.post("/vapi/tools", async (req, res) => {
 
         case "finalize_order": {
           state.stage = "completed";
-
           results.push(
             toolResult(name, toolCallId, {
               ok: true,
@@ -788,23 +945,25 @@ app.post("/speech", (req, res) => {
   const session = getSession(req.body.CallSid);
   const speech = normalize(req.body.SpeechResult || "");
 
+  storeLanguageFromSpeech(session, speech);
+
   console.log("Stage:", session.stage, "| Speech:", speech);
   console.log("Order:", JSON.stringify(session.order));
 
   if (!speech) {
     if (session.stage === "name") {
-      return reprompt(session, res, "Sorry, I didn’t catch the name. What name can I put that under?");
+      return reprompt(session, res, sayByLanguage(session, "Sorry, I didn’t catch the name. What name can I put that under?", "Perdón, no alcancé el nombre. ¿A nombre de quién?", "Sorry, no alcancé el nombre. What name can I put that under?"));
     }
     if (session.stage === "extra_upsell") {
-      return reprompt(session, res, "Want extra ranch or blue cheese, or maybe a side?");
+      return reprompt(session, res, sayByLanguage(session, "Want extra ranch or blue cheese, or maybe a side?", "¿Quieres ranch extra o queso azul extra, o algún side?", "Want extra ranch o blue cheese, o maybe a side?"));
     }
     if (session.stage === "included_dip") {
-      return reprompt(session, res, "Ranch or blue cheese with that?");
+      return reprompt(session, res, sayByLanguage(session, "Ranch or blue cheese with that?", "¿Ranch o queso azul con eso?", "Ranch o blue cheese con eso?"));
     }
     if (session.stage === "sauce" || session.stage === "sauce_more_or_done") {
-      return reprompt(session, res, "What sauce would you like?");
+      return reprompt(session, res, sayByLanguage(session, "What sauce would you like?", "¿Qué salsa quieres?", "What sauce quieres?"));
     }
-    return reprompt(session, res, "Sorry, I missed that. What can I get started for you?");
+    return reprompt(session, res, sayByLanguage(session, "Sorry, I missed that. What can I get started for you?", "Perdón, no alcancé a escuchar bien. ¿Qué te preparo?", "Sorry, no alcancé bien. What can I get started for you?"));
   }
 
   const interrupt = handleInterruptions(session, speech, res);
@@ -812,11 +971,28 @@ app.post("/speech", (req, res) => {
 
   if (session.stage === "language") {
     session.stage = "order";
-    return sayAndStore(session, res, pick([
-      "What can I get started for you?",
-      "What can I get for you today?",
-      "What are we having today?"
-    ]));
+    return sayAndStore(
+      session,
+      res,
+      sayByLanguage(
+        session,
+        pick([
+          "What can I get started for you?",
+          "What can I get for you today?",
+          "What are we having today?"
+        ]),
+        pick([
+          "¿Qué te preparo?",
+          "¿Qué te doy hoy?",
+          "¿Qué orden vas a llevar?"
+        ]),
+        pick([
+          "What can I get started for you?",
+          "¿Qué te preparo today?",
+          "What are we having hoy?"
+        ])
+      )
+    );
   }
 
   if (session.stage === "order") {
@@ -825,7 +1001,7 @@ app.post("/speech", (req, res) => {
     const missing = missingCore(session.order);
     if (missing) {
       if (missing === "sauce") session.stage = "sauce";
-      return sayAndStore(session, res, nextPromptForMissing(session.order));
+      return sayAndStore(session, res, nextPromptForMissing(session, session.order));
     }
 
     const allowed = sauceSlotsAllowed(session.order.quantity);
@@ -835,10 +1011,21 @@ app.post("/speech", (req, res) => {
       return sayAndStore(
         session,
         res,
-        pick([
-          `Got you. You can do up to ${allowed} sauces. Right now I have ${sauceSummary(session.order)}. Want to add another or keep it like that?`,
-          `Perfect. I’ve got ${sauceSummary(session.order)} so far. You can do up to ${allowed} sauces. Add another or keep it like that?`
-        ])
+        sayByLanguage(
+          session,
+          pick([
+            `Got you. You can do up to ${allowed} sauces. Right now I have ${sauceSummary(session.order)}. Want to add another or keep it like that?`,
+            `Perfect. I’ve got ${sauceSummary(session.order)} so far. You can do up to ${allowed} sauces. Add another or keep it like that?`
+          ]),
+          pick([
+            `Perfecto. Puedes elegir hasta ${allowed} salsas. Ahorita tengo ${sauceSummary(session.order)}. ¿Quieres otra o así lo dejamos?`,
+            `Muy bien. Puedes poner hasta ${allowed} salsas. Ahorita tengo ${sauceSummary(session.order)}. ¿Quieres otra o así?`
+          ]),
+          pick([
+            `Got you. Puedes hacer hasta ${allowed} sauces. Right now I have ${sauceSummary(session.order)}. Want to add another or keep it like that?`,
+            `Perfecto. You can do up to ${allowed} sauces. Ahorita tengo ${sauceSummary(session.order)}. ¿Quieres otra o así lo dejamos?`
+          ])
+        )
       );
     }
 
@@ -847,11 +1034,22 @@ app.post("/speech", (req, res) => {
     return sayAndStore(
       session,
       res,
-      pick([
-        `Perfect. I’ve got ${sauceSummary(session.order)}. Ranch or blue cheese with that? You get ${formatCountNoun(dips, "dip", "dips")}.`,
-        `Alright, ${sauceSummary(session.order)}. That comes with ${formatCountNoun(dips, "dip", "dips")}. Ranch or blue cheese?`,
-        `Got it. ${sauceSummary(session.order)}. For the dips, ranch or blue cheese? You get ${formatCountNoun(dips, "dip", "dips")}.`
-      ])
+      sayByLanguage(
+        session,
+        pick([
+          `Perfect. I’ve got ${sauceSummary(session.order)}. Ranch or blue cheese with that? You get ${formatCountNoun(dips, "dip", "dips")}.`,
+          `Alright, ${sauceSummary(session.order)}. That comes with ${formatCountNoun(dips, "dip", "dips")}. Ranch or blue cheese?`,
+          `Got it. ${sauceSummary(session.order)}. For the dips, ranch or blue cheese? You get ${formatCountNoun(dips, "dip", "dips")}.`
+        ]),
+        pick([
+          `Perfecto. Tengo ${sauceSummary(session.order)}. ¿Ranch o queso azul? Incluye ${formatCountNoun(dips, "dip", "dips")}.`,
+          `Muy bien. Va ${sauceSummary(session.order)}. Eso incluye ${formatCountNoun(dips, "dip", "dips")}. ¿Ranch o queso azul?`
+        ]),
+        pick([
+          `Perfecto. I’ve got ${sauceSummary(session.order)}. ¿Ranch o blue cheese? You get ${formatCountNoun(dips, "dip", "dips")}.`,
+          `Alright, ${sauceSummary(session.order)}. Eso incluye ${formatCountNoun(dips, "dip", "dips")}. Ranch o blue cheese?`
+        ])
+      )
     );
   }
 
@@ -864,11 +1062,28 @@ app.post("/speech", (req, res) => {
 
     const sauces = extractSauces(speech);
     if (!sauces.length) {
-      return sayAndStore(session, res, pick([
-        "Sorry, what sauce was that?",
-        "I missed the sauce. What flavor do you want?",
-        "Sorry, which sauce did you want?"
-      ]));
+      return sayAndStore(
+        session,
+        res,
+        sayByLanguage(
+          session,
+          pick([
+            "Sorry, what sauce was that?",
+            "I missed the sauce. What flavor do you want?",
+            "Sorry, which sauce did you want?"
+          ]),
+          pick([
+            "Perdón, ¿qué salsa dijiste?",
+            "¿Qué sabor quieres?",
+            "No alcancé la salsa. ¿Cuál quieres?"
+          ]),
+          pick([
+            "Sorry, ¿qué sauce dijiste?",
+            "I missed the salsa. What flavor quieres?",
+            "¿Qué sauce quieres?"
+          ])
+        )
+      );
     }
 
     session.order.sauces = [];
@@ -882,10 +1097,21 @@ app.post("/speech", (req, res) => {
       return sayAndStore(
         session,
         res,
-        pick([
-          `Perfect. Right now I have ${sauceSummary(session.order)}. You can do up to ${allowed} sauces. Want to add another or keep it like that?`,
-          `Got it. So far I have ${sauceSummary(session.order)}. Want another sauce or keep it like that?`
-        ])
+        sayByLanguage(
+          session,
+          pick([
+            `Perfect. Right now I have ${sauceSummary(session.order)}. You can do up to ${allowed} sauces. Want to add another or keep it like that?`,
+            `Got it. So far I have ${sauceSummary(session.order)}. Want another sauce or keep it like that?`
+          ]),
+          pick([
+            `Perfecto. Ahorita tengo ${sauceSummary(session.order)}. Puedes elegir hasta ${allowed} salsas. ¿Quieres otra o así?`,
+            `Muy bien. Llevo ${sauceSummary(session.order)}. Puedes escoger hasta ${allowed} salsas. ¿Quieres otra o así?`
+          ]),
+          pick([
+            `Perfecto. Right now I have ${sauceSummary(session.order)}. Puedes elegir hasta ${allowed} sauces. Want another or keep it like that?`,
+            `Got it. Ahorita tengo ${sauceSummary(session.order)}. Want another sauce o así?`
+          ])
+        )
       );
     }
 
@@ -894,10 +1120,21 @@ app.post("/speech", (req, res) => {
     return sayAndStore(
       session,
       res,
-      pick([
-        `Perfect. I’ve got ${sauceSummary(session.order)}. Ranch or blue cheese with that? You get ${formatCountNoun(dips, "dip", "dips")}.`,
-        `Alright, ${sauceSummary(session.order)}. That comes with ${formatCountNoun(dips, "dip", "dips")}. Ranch or blue cheese?`
-      ])
+      sayByLanguage(
+        session,
+        pick([
+          `Perfect. I’ve got ${sauceSummary(session.order)}. Ranch or blue cheese with that? You get ${formatCountNoun(dips, "dip", "dips")}.`,
+          `Alright, ${sauceSummary(session.order)}. That comes with ${formatCountNoun(dips, "dip", "dips")}. Ranch or blue cheese?`
+        ]),
+        pick([
+          `Perfecto. Tengo ${sauceSummary(session.order)}. ¿Ranch o queso azul? Incluye ${formatCountNoun(dips, "dip", "dips")}.`,
+          `Muy bien. Va ${sauceSummary(session.order)}. Eso incluye ${formatCountNoun(dips, "dip", "dips")}. ¿Ranch o queso azul?`
+        ]),
+        pick([
+          `Perfecto. I’ve got ${sauceSummary(session.order)}. ¿Ranch o blue cheese? You get ${formatCountNoun(dips, "dip", "dips")}.`,
+          `Alright, ${sauceSummary(session.order)}. Eso incluye ${formatCountNoun(dips, "dip", "dips")}. Ranch o blue cheese?`
+        ])
+      )
     );
   }
 
@@ -911,11 +1148,19 @@ app.post("/speech", (req, res) => {
       if (session.order.sauceMode !== "single" && session.order.sauces.length > allowed) {
         session.order.sauces = session.order.sauces.slice(0, allowed);
       }
+
       return sayAndStore(
         session,
         res,
-        `Got it. Now I have ${session.order.quantity} ${session.order.style || ""}`.replace(/\s+/g, " ").trim() +
-          `. Right now the sauces are ${sauceSummary(session.order)}. Want to add another or keep it like that?`
+        sayByLanguage(
+          session,
+          `Got it. Now I have ${session.order.quantity} ${session.order.style || ""}`.replace(/\s+/g, " ").trim() +
+            `. Right now the sauces are ${sauceSummary(session.order)}. Want to add another or keep it like that?`,
+          `Muy bien. Ahora tengo ${session.order.quantity} ${session.order.style || ""}`.replace(/\s+/g, " ").trim() +
+            `. Ahorita las salsas son ${sauceSummary(session.order)}. ¿Quieres otra o así lo dejamos?`,
+          `Got it. Ahora tengo ${session.order.quantity} ${session.order.style || ""}`.replace(/\s+/g, " ").trim() +
+            `. Right now the sauces are ${sauceSummary(session.order)}. ¿Quieres otra o así?`
+        )
       );
     }
 
@@ -924,10 +1169,21 @@ app.post("/speech", (req, res) => {
       return sayAndStore(
         session,
         res,
-        pick([
-          `Perfect. I switched that to ${session.order.style}. Right now I have ${sauceSummary(session.order)}. Want to add another or keep it like that?`,
-          `Got it. ${session.order.style} now. Sauces are ${sauceSummary(session.order)}. Add another or keep it like that?`
-        ])
+        sayByLanguage(
+          session,
+          pick([
+            `Perfect. I switched that to ${session.order.style}. Right now I have ${sauceSummary(session.order)}. Want to add another or keep it like that?`,
+            `Got it. ${session.order.style} now. Sauces are ${sauceSummary(session.order)}. Add another or keep it like that?`
+          ]),
+          pick([
+            `Perfecto. Lo cambié a ${session.order.style}. Ahorita tengo ${sauceSummary(session.order)}. ¿Quieres otra salsa o así?`,
+            `Muy bien. Ahora va ${session.order.style}. Las salsas son ${sauceSummary(session.order)}. ¿Quieres otra o así?`
+          ]),
+          pick([
+            `Perfecto. I switched that to ${session.order.style}. Ahorita tengo ${sauceSummary(session.order)}. Want another sauce o así?`,
+            `Got it. ${session.order.style} now. Sauces are ${sauceSummary(session.order)}. ¿Otra o así?`
+          ])
+        )
       );
     }
 
@@ -947,10 +1203,21 @@ app.post("/speech", (req, res) => {
       return sayAndStore(
         session,
         res,
-        pick([
-          `Got it. I have ${sauceSummary(session.order)}. You can still add ${remaining} more sauce${remaining > 1 ? "s" : ""}, or keep it like that.`,
-          `Perfect. Right now it’s ${sauceSummary(session.order)}. You can still add ${remaining} more sauce${remaining > 1 ? "s" : ""}, or leave it there.`
-        ])
+        sayByLanguage(
+          session,
+          pick([
+            `Got it. I have ${sauceSummary(session.order)}. You can still add ${remaining} more sauce${remaining > 1 ? "s" : ""}, or keep it like that.`,
+            `Perfect. Right now it’s ${sauceSummary(session.order)}. You can still add ${remaining} more sauce${remaining > 1 ? "s" : ""}, or leave it there.`
+          ]),
+          pick([
+            `Perfecto. Ahorita está ${sauceSummary(session.order)}. Todavía puedes agregar ${remaining} salsa${remaining > 1 ? "s" : ""}, o así lo dejamos.`,
+            `Muy bien. Tengo ${sauceSummary(session.order)}. Todavía puedes agregar ${remaining} salsa${remaining > 1 ? "s" : ""}, o así.`
+          ]),
+          pick([
+            `Got it. Ahorita tengo ${sauceSummary(session.order)}. You can still add ${remaining} more sauce${remaining > 1 ? "s" : ""}, o keep it like that.`,
+            `Perfecto. Right now it’s ${sauceSummary(session.order)}. Todavía puedes agregar ${remaining} more sauce${remaining > 1 ? "s" : ""}, o leave it there.`
+          ])
+        )
       );
     }
 
@@ -958,10 +1225,21 @@ app.post("/speech", (req, res) => {
       return sayAndStore(
         session,
         res,
-        pick([
-          `Sorry, I missed that. Right now I have ${sauceSummary(session.order)}. Want to add another or keep it like that?`,
-          `I missed that part. Right now it’s ${sauceSummary(session.order)}. Add another or keep it like that?`
-        ])
+        sayByLanguage(
+          session,
+          pick([
+            `Sorry, I missed that. Right now I have ${sauceSummary(session.order)}. Want to add another or keep it like that?`,
+            `I missed that part. Right now it’s ${sauceSummary(session.order)}. Add another or keep it like that?`
+          ]),
+          pick([
+            `Perdón, no alcancé esa parte. Ahorita tengo ${sauceSummary(session.order)}. ¿Quieres otra o así?`,
+            `No alcancé bien. Ahorita está ${sauceSummary(session.order)}. ¿Quieres otra salsa o así lo dejamos?`
+          ]),
+          pick([
+            `Sorry, no alcancé esa parte. Right now I have ${sauceSummary(session.order)}. Want to add another o keep it like that?`,
+            `I missed that part. Ahorita está ${sauceSummary(session.order)}. Add another sauce o así?`
+          ])
+        )
       );
     }
 
@@ -970,10 +1248,21 @@ app.post("/speech", (req, res) => {
     return sayAndStore(
       session,
       res,
-      pick([
-        `Perfect. I’ve got ${sauceSummary(session.order)}. Ranch or blue cheese with that? You get ${formatCountNoun(dips, "dip", "dips")}.`,
-        `Alright, ${sauceSummary(session.order)}. That comes with ${formatCountNoun(dips, "dip", "dips")}. Ranch or blue cheese?`
-      ])
+      sayByLanguage(
+        session,
+        pick([
+          `Perfect. I’ve got ${sauceSummary(session.order)}. Ranch or blue cheese with that? You get ${formatCountNoun(dips, "dip", "dips")}.`,
+          `Alright, ${sauceSummary(session.order)}. That comes with ${formatCountNoun(dips, "dip", "dips")}. Ranch or blue cheese?`
+        ]),
+        pick([
+          `Perfecto. Tengo ${sauceSummary(session.order)}. ¿Ranch o queso azul? Incluye ${formatCountNoun(dips, "dip", "dips")}.`,
+          `Muy bien. Va ${sauceSummary(session.order)}. Eso incluye ${formatCountNoun(dips, "dip", "dips")}. ¿Ranch o queso azul?`
+        ]),
+        pick([
+          `Perfecto. I’ve got ${sauceSummary(session.order)}. ¿Ranch o blue cheese? You get ${formatCountNoun(dips, "dip", "dips")}.`,
+          `Alright, ${sauceSummary(session.order)}. Eso incluye ${formatCountNoun(dips, "dip", "dips")}. Ranch o blue cheese?`
+        ])
+      )
     );
   }
 
@@ -988,7 +1277,12 @@ app.post("/speech", (req, res) => {
       return sayAndStore(
         session,
         res,
-        `Got it. That now comes with ${formatCountNoun(dipSlotsAllowed(session.order.quantity), "dip", "dips")}. Ranch or blue cheese?`
+        sayByLanguage(
+          session,
+          `Got it. That now comes with ${formatCountNoun(dipSlotsAllowed(session.order.quantity), "dip", "dips")}. Ranch or blue cheese?`,
+          `Muy bien. Ahora eso incluye ${formatCountNoun(dipSlotsAllowed(session.order.quantity), "dip", "dips")}. ¿Ranch o queso azul?`,
+          `Got it. Ahora eso incluye ${formatCountNoun(dipSlotsAllowed(session.order.quantity), "dip", "dips")}. Ranch o blue cheese?`
+        )
       );
     }
 
@@ -1003,10 +1297,21 @@ app.post("/speech", (req, res) => {
       return sayAndStore(
         session,
         res,
-        pick([
-          `That comes with ${formatCountNoun(max, "dip", "dips")}. Ranch or blue cheese?`,
-          `For the dips, ranch or blue cheese? You get ${formatCountNoun(max, "dip", "dips")}.`
-        ])
+        sayByLanguage(
+          session,
+          pick([
+            `That comes with ${formatCountNoun(max, "dip", "dips")}. Ranch or blue cheese?`,
+            `For the dips, ranch or blue cheese? You get ${formatCountNoun(max, "dip", "dips")}.`
+          ]),
+          pick([
+            `Eso incluye ${formatCountNoun(max, "dip", "dips")}. ¿Ranch o queso azul?`,
+            `Para los dips, ¿ranch o queso azul? Te tocan ${formatCountNoun(max, "dip", "dips")}.`
+          ]),
+          pick([
+            `That includes ${formatCountNoun(max, "dip", "dips")}. Ranch o blue cheese?`,
+            `For the dips, ¿ranch o queso azul? You get ${formatCountNoun(max, "dip", "dips")}.`
+          ])
+        )
       );
     }
 
@@ -1020,7 +1325,12 @@ app.post("/speech", (req, res) => {
         return sayAndStore(
           session,
           res,
-          `Got it. Right now you have ${dipSummary(session.order.includedDips)}. I still need ${max - session.order.includedDips.length} more. Ranch or blue cheese?`
+          sayByLanguage(
+            session,
+            `Got it. Right now you have ${dipSummary(session.order.includedDips)}. I still need ${max - session.order.includedDips.length} more. Ranch or blue cheese?`,
+            `Muy bien. Ahorita tienes ${dipSummary(session.order.includedDips)}. Todavía me falta ${max - session.order.includedDips.length}. ¿Ranch o queso azul?`,
+            `Got it. Ahorita tienes ${dipSummary(session.order.includedDips)}. I still need ${max - session.order.includedDips.length} more. Ranch o blue cheese?`
+          )
         );
       }
     }
@@ -1029,11 +1339,22 @@ app.post("/speech", (req, res) => {
     return sayAndStore(
       session,
       res,
-      pick([
-        `Perfect. That gives you ${dipSummary(session.order.includedDips)}. Want extra ranch or maybe a side like fries or mac bites?`,
-        `Got it. I have ${dipSummary(session.order.includedDips)}. Want to add extra ranch, or maybe fries or mac bites?`,
-        `Alright. You’ve got ${dipSummary(session.order.includedDips)}. Want any extra ranch or maybe a side?`
-      ])
+      sayByLanguage(
+        session,
+        pick([
+          `Perfect. That gives you ${dipSummary(session.order.includedDips)}. Want extra ranch or maybe a side like fries or mac bites?`,
+          `Got it. I have ${dipSummary(session.order.includedDips)}. Want to add extra ranch, or maybe fries or mac bites?`,
+          `Alright. You’ve got ${dipSummary(session.order.includedDips)}. Want any extra ranch or maybe a side?`
+        ]),
+        pick([
+          `Perfecto. Ya tienes ${dipSummary(session.order.includedDips)}. ¿Quieres ranch extra o algún side como papas o mac bites?`,
+          `Muy bien. Van ${dipSummary(session.order.includedDips)}. ¿Quieres extra ranch o algún side?`
+        ]),
+        pick([
+          `Perfecto. You’ve got ${dipSummary(session.order.includedDips)}. ¿Quieres extra ranch o maybe a side like fries o mac bites?`,
+          `Alright. Ya tienes ${dipSummary(session.order.includedDips)}. Want extra ranch o algún side?`
+        ])
+      )
     );
   }
 
@@ -1053,11 +1374,22 @@ app.post("/speech", (req, res) => {
       return sayAndStore(
         session,
         res,
-        pick([
-          `Perfect. I’ve got extra ${dipSummary(session.order.extraDips)}. Anything else?`,
-          `Got it. Added extra ${dipSummary(session.order.extraDips)}. Anything else for you?`,
-          `Alright, extra ${dipSummary(session.order.extraDips)}. Anything else?`
-        ])
+        sayByLanguage(
+          session,
+          pick([
+            `Perfect. I’ve got extra ${dipSummary(session.order.extraDips)}. Anything else?`,
+            `Got it. Added extra ${dipSummary(session.order.extraDips)}. Anything else for you?`,
+            `Alright, extra ${dipSummary(session.order.extraDips)}. Anything else?`
+          ]),
+          pick([
+            `Perfecto. Agregué extra ${dipSummary(session.order.extraDips)}. ¿Algo más?`,
+            `Muy bien. Ya quedó extra ${dipSummary(session.order.extraDips)}. ¿Algo más?`
+          ]),
+          pick([
+            `Perfecto. I added extra ${dipSummary(session.order.extraDips)}. ¿Algo más?`,
+            `Alright, extra ${dipSummary(session.order.extraDips)}. Anything else o con eso?`
+          ])
+        )
       );
     }
 
@@ -1067,11 +1399,22 @@ app.post("/speech", (req, res) => {
       return sayAndStore(
         session,
         res,
-        pick([
-          `Perfect, adding ${side}. What name can I put that under?`,
-          `Got you. I added ${side}. What name is the order under?`,
-          `Alright, ${side} added. What name can I put on it?`
-        ])
+        sayByLanguage(
+          session,
+          pick([
+            `Perfect, adding ${side}. What name can I put that under?`,
+            `Got you. I added ${side}. What name is the order under?`,
+            `Alright, ${side} added. What name can I put on it?`
+          ]),
+          pick([
+            `Perfecto, agrego ${side}. ¿A nombre de quién pongo la orden?`,
+            `Muy bien, ya agregué ${side}. ¿A nombre de quién va?`
+          ]),
+          pick([
+            `Perfecto, adding ${side}. ¿A nombre de quién pongo la orden?`,
+            `Got you. I added ${side}. What name va la orden bajo?`
+          ])
+        )
       );
     }
 
@@ -1080,22 +1423,46 @@ app.post("/speech", (req, res) => {
       return sayAndStore(
         session,
         res,
-        pick([
-          "Perfect. What name can I put that under?",
-          "Sounds good. What name is the order under?",
-          "Alright. What name can I put on it?"
-        ])
+        sayByLanguage(
+          session,
+          pick([
+            "Perfect. What name can I put that under?",
+            "Sounds good. What name is the order under?",
+            "Alright. What name can I put on it?"
+          ]),
+          pick([
+            "Perfecto. ¿A nombre de quién pongo la orden?",
+            "Muy bien. ¿A nombre de quién va?",
+            "Listo. ¿Qué nombre le pongo?"
+          ]),
+          pick([
+            "Perfecto. What name can I put that under?",
+            "Sounds good. ¿A nombre de quién va la orden?",
+            "Alright. ¿Qué name le pongo?"
+          ])
+        )
       );
     }
 
     return sayAndStore(
       session,
       res,
-      pick([
-        "Sorry, I missed that. Want extra ranch or blue cheese, or maybe a side?",
-        "Sorry, do you want any extra ranch or maybe a side?",
-        "I missed that part. Extra ranch or maybe a side?"
-      ])
+      sayByLanguage(
+        session,
+        pick([
+          "Sorry, I missed that. Want extra ranch or blue cheese, or maybe a side?",
+          "Sorry, do you want any extra ranch or maybe a side?",
+          "I missed that part. Extra ranch or maybe a side?"
+        ]),
+        pick([
+          "Perdón, ¿quieres ranch extra o algún side?",
+          "No alcancé bien. ¿Quieres ranch extra, queso azul extra o algún side?"
+        ]),
+        pick([
+          "Sorry, ¿quieres extra ranch o maybe a side?",
+          "I missed that part. Extra ranch o algún side?"
+        ])
+      )
     );
   }
 
@@ -1105,11 +1472,24 @@ app.post("/speech", (req, res) => {
       return sayAndStore(
         session,
         res,
-        pick([
-          "Sorry, I didn’t catch the name. What name can I put that under?",
-          "I missed the name. What should I put it under?",
-          "Sorry about that. What name is it under?"
-        ])
+        sayByLanguage(
+          session,
+          pick([
+            "Sorry, I didn’t catch the name. What name can I put that under?",
+            "I missed the name. What should I put it under?",
+            "Sorry about that. What name is it under?"
+          ]),
+          pick([
+            "Perdón, no alcancé el nombre. ¿A nombre de quién?",
+            "No escuché bien el nombre. ¿Qué nombre le pongo?",
+            "Perdón. ¿A nombre de quién va?"
+          ]),
+          pick([
+            "Sorry, no alcancé el name. What name can I put that under?",
+            "I missed the nombre. ¿Qué nombre le pongo?",
+            "Sorry about that. ¿A nombre de quién va?"
+          ])
+        )
       );
     }
 
@@ -1117,11 +1497,22 @@ app.post("/speech", (req, res) => {
     return sayAndStore(
       session,
       res,
-      pick([
-        `Perfect, ${name}. You’re all set. We’ll have it ready for you shortly.`,
-        `Got it, ${name}. Your order’s all set. We’ll have that ready for you soon.`,
-        `Alright, ${name}. You’re good to go. We’ll have it ready shortly.`
-      ]),
+      sayByLanguage(
+        session,
+        pick([
+          `Perfect, ${name}. You’re all set. We’ll have it ready for you shortly.`,
+          `Got it, ${name}. Your order’s all set. We’ll have that ready for you soon.`,
+          `Alright, ${name}. You’re good to go. We’ll have it ready shortly.`
+        ]),
+        pick([
+          `Perfecto, ${name}. Ya quedó tu orden. La tendremos lista pronto.`,
+          `Muy bien, ${name}. Tu orden ya quedó. La tendremos lista en breve.`
+        ]),
+        pick([
+          `Perfecto, ${name}. You’re all set. La tendremos lista pronto.`,
+          `Alright, ${name}. Ya quedó tu orden. We’ll have it ready shortly.`
+        ])
+      ),
       true
     );
   }
@@ -1130,11 +1521,24 @@ app.post("/speech", (req, res) => {
   return sayAndStore(
     session,
     res,
-    pick([
-      "Let’s get started. What can I get for you?",
-      "What can I get started for you?",
-      "Go ahead, what can I get for you?"
-    ])
+    sayByLanguage(
+      session,
+      pick([
+        "Let’s get started. What can I get for you?",
+        "What can I get started for you?",
+        "Go ahead, what can I get for you?"
+      ]),
+      pick([
+        "Vamos empezando. ¿Qué te preparo?",
+        "Dime, ¿qué te doy?",
+        "Muy bien, ¿qué te preparo?"
+      ]),
+      pick([
+        "Let’s get started. ¿Qué te preparo?",
+        "Go ahead, what can I get for you?",
+        "Muy bien, what can I get for you?"
+      ])
+    )
   );
 });
 
