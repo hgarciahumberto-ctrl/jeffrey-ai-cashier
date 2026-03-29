@@ -96,6 +96,7 @@ function getOrCreateCallState(callId) {
   if (!callStates.has(callId)) {
     callStates.set(callId, {
       language: "unknown",
+      languageLocked: false,
       customerName: null,
       items: [],
       currentItem: null,
@@ -136,7 +137,7 @@ function detectLanguageMode(text = "") {
 
   const englishSignals = [
     "hi", "hello", "can i get", "i want", "to go", "order",
-    "wings", "bone in", "sauce", "flavor", "blue cheese", "name",
+    "wings", "bone in", "bone-in", "sauce", "flavor", "blue cheese", "name",
     "put it under", "thank you", "yes", "sure", "english"
   ];
 
@@ -178,7 +179,15 @@ function storeLanguageFromSpeech(session, speech) {
   }
 }
 
+function explicitLockCallLanguage(state, lang) {
+  if (lang !== "es" && lang !== "en") return;
+  state.language = lang;
+  state.languageLocked = true;
+}
+
 function maybeUpdateCallLanguage(state, text = "") {
+  if (state.languageLocked) return;
+
   const detected = detectLanguageMode(text);
   if (detected === "unknown") return;
 
@@ -760,6 +769,24 @@ function qtyToAllowedSauces(quantity) {
   return Math.floor(quantity / 6);
 }
 
+function normalizeItemType(itemType = "") {
+  const value = normalize(String(itemType));
+
+  if (["wings", "wing", "bone in", "bone-in", "classic", "traditional", "alitas", "con hueso"].includes(value)) {
+    return "wings";
+  }
+
+  if (["boneless", "sin hueso"].includes(value)) {
+    return "boneless";
+  }
+
+  return null;
+}
+
+function validWingQuantity(quantity) {
+  return [6, 9, 12, 18, 24, 48].includes(Number(quantity));
+}
+
 function setCurrentItem(state, itemType, quantity) {
   const allowedSauces = qtyToAllowedSauces(quantity);
   state.currentItem = {
@@ -872,6 +899,7 @@ app.post("/vapi/tools", async (req, res) => {
 
     const message = req.body?.message;
     if (!message || message.type !== "tool-calls") {
+      console.log("No tool-calls in message.");
       return res.status(200).json({ results: [] });
     }
 
@@ -881,15 +909,44 @@ app.post("/vapi/tools", async (req, res) => {
     const latestCustomerText = getLatestCustomerText(message);
     maybeUpdateCallLanguage(state, latestCustomerText || "");
 
+    if (wantsSpanish(normalize(latestCustomerText || ""))) {
+      explicitLockCallLanguage(state, "es");
+    } else if (wantsEnglish(normalize(latestCustomerText || ""))) {
+      explicitLockCallLanguage(state, "en");
+    }
+
     const results = [];
 
     for (const tc of message.toolCallList || []) {
       const { id: toolCallId, name, parameters = {} } = tc;
 
+      console.log("TOOL NAME:", name);
+      console.log("TOOL PARAMS:", JSON.stringify(parameters));
+
       switch (name) {
         case "start_order_item": {
-          const { itemType, quantity } = parameters;
-          setCurrentItem(state, itemType, Number(quantity));
+          let { itemType, quantity } = parameters;
+
+          itemType = normalizeItemType(itemType);
+          quantity = Number(quantity);
+
+          console.log("start_order_item normalized:", { callId, itemType, quantity, language: state.language });
+
+          if (!itemType || !validWingQuantity(quantity)) {
+            results.push(
+              toolResult(name, toolCallId, {
+                ok: false,
+                speak: sayForCall(
+                  state,
+                  "I missed part of that order. Was that bone-in or boneless, and how many?",
+                  "No alcancé bien esa parte. ¿Eran alitas con hueso o boneless, y cuántas?"
+                )
+              })
+            );
+            break;
+          }
+
+          setCurrentItem(state, itemType, quantity);
 
           results.push(
             toolResult(name, toolCallId, {
@@ -921,6 +978,20 @@ app.post("/vapi/tools", async (req, res) => {
             break;
           }
 
+          if (!validWingQuantity(newQuantity)) {
+            results.push(
+              toolResult(name, toolCallId, {
+                ok: false,
+                speak: sayForCall(
+                  state,
+                  "That quantity doesn’t match our wing sizes. We have 6, 9, 12, 18, 24, or 48.",
+                  "Esa cantidad no coincide con nuestros tamaños. Tenemos 6, 9, 12, 18, 24 o 48."
+                )
+              })
+            );
+            break;
+          }
+
           state.currentItem.quantity = newQuantity;
           state.currentItem.allowedSauces = qtyToAllowedSauces(newQuantity);
           state.currentItem.dipsIncluded = state.currentItem.allowedSauces;
@@ -934,8 +1005,8 @@ app.post("/vapi/tools", async (req, res) => {
               ok: true,
               speak: sayForCall(
                 state,
-                `Got you, switching that to ${newQuantity}. You can do up to ${state.currentItem.allowedSauces} sauces.`,
-                `Muy bien, lo cambio a ${newQuantity}. Puedes escoger hasta ${state.currentItem.allowedSauces} salsas.`
+                `Got you, switching that to ${newQuantity}. You can do up to ${state.currentItem.allowedSauces} sauces. What sauces do you want?`,
+                `Muy bien, lo cambio a ${newQuantity}. Puedes escoger hasta ${state.currentItem.allowedSauces} salsas. ¿Qué salsas quieres?`
               )
             })
           );
@@ -958,7 +1029,24 @@ app.post("/vapi/tools", async (req, res) => {
           }
 
           let sauces = Array.isArray(parameters.sauces) ? parameters.sauces : [];
-          sauces = sauces.slice(0, state.currentItem.allowedSauces);
+          sauces = sauces
+            .map((s) => findAlias(normalize(String(s)), SAUCE_ALIASES) || normalize(String(s)))
+            .filter(Boolean)
+            .slice(0, state.currentItem.allowedSauces);
+
+          if (!sauces.length) {
+            results.push(
+              toolResult(name, toolCallId, {
+                ok: false,
+                speak: sayForCall(
+                  state,
+                  "I missed the sauces. What sauces would you like?",
+                  "No alcancé las salsas. ¿Qué salsas quieres?"
+                )
+              })
+            );
+            break;
+          }
 
           state.currentItem.sauces = sauces;
           state.flags.saucesConfirmed = true;
@@ -991,7 +1079,10 @@ app.post("/vapi/tools", async (req, res) => {
             break;
           }
 
-          const extraDips = Array.isArray(parameters.extraDips) ? parameters.extraDips : [];
+          const extraDips = Array.isArray(parameters.extraDips)
+            ? parameters.extraDips.map((d) => findAlias(normalize(String(d)), DIP_ALIASES) || normalize(String(d))).filter(Boolean)
+            : [];
+
           state.currentItem.extraDips = extraDips;
           state.flags.dipsOffered = true;
 
@@ -1035,7 +1126,11 @@ app.post("/vapi/tools", async (req, res) => {
             break;
           }
 
-          state.currentItem.side = parameters.side || null;
+          const normalizedSide = parameters.side
+            ? findAlias(normalize(String(parameters.side)), EXTRA_SIDE_ALIASES) || normalize(String(parameters.side))
+            : null;
+
+          state.currentItem.side = normalizedSide;
           state.flags.upsellOffered = true;
 
           results.push(
@@ -1053,6 +1148,20 @@ app.post("/vapi/tools", async (req, res) => {
 
         case "set_customer_name": {
           state.customerName = parameters.customerName || null;
+
+          if (!state.customerName) {
+            results.push(
+              toolResult(name, toolCallId, {
+                ok: false,
+                speak: sayForCall(
+                  state,
+                  "I missed the name. What name should I put on the order?",
+                  "No alcancé el nombre. ¿A nombre de quién pongo la orden?"
+                )
+              })
+            );
+            break;
+          }
 
           if (state.currentItem) {
             state.items.push(state.currentItem);
