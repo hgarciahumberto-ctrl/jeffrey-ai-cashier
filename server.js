@@ -219,13 +219,13 @@ function maybeUpdateCallLanguage(state, text = "") {
 
 function sayByLanguage(session, english, spanish, spanglish = null) {
   if (session.languageMode === "es") return spanish;
-  if (session.languageMode === "spanglish") return spanglish || english;
+  if (session.languageMode === "spanglish") return spanish;
   return english;
 }
 
 function sayForCall(state, english, spanish, spanglish = null) {
   if (state.language === "es") return spanish;
-  if (state.language === "spanglish") return spanglish || english;
+  if (state.language === "spanglish") return spanish;
   return english;
 }
 
@@ -740,7 +740,7 @@ function lemonPepperPrompt(session) {
   return sayByLanguage(
     session,
     "Just so you know, we have that as lime pepper here. Want to keep lime pepper or change it?",
-    "Nomás para confirmar, aquí la tenemos como lime pepper. ¿La dejamos así o la cambias?"
+    "Nomás para confirmar, aquí la tenemos como laim pepper. ¿La dejamos así o la cambias?"
   );
 }
 
@@ -1314,8 +1314,8 @@ app.post("/voice", (req, res) => {
   const session = getSession(req.body.CallSid);
   resetSession(session);
   session.stage = "language";
-  session.lastPrompt = "Thank you for calling Flaps and Racks. This is Jeffrey. English or Spanish?";
-  return speak(session, res, "Thank you for calling Flaps and Racks. This is Jeffrey. English or Spanish?");
+  session.lastPrompt = "Thank you for calling Flaps and Racks. Do you prefer English, o prefiere español?";
+  return speak(session, res, "Thank you for calling Flaps and Racks. Do you prefer English, o prefiere español?");
 });
 
 app.post("/speech", (req, res) => {
@@ -1333,7 +1333,7 @@ app.post("/speech", (req, res) => {
       return sayAndStore(session, res, "Claro, sí. ¿Qué te preparo?");
     }
 
-    return sayAndStore(session, res, "Claro. Seguimos en español.");
+    return sayAndStore(session, res, "Claro. Seguimos en español. Yo te contesto en español.");
   }
 
   if (wantsEnglish(speech)) {
