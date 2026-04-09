@@ -15,8 +15,10 @@ const ENGLISH_VOICE = process.env.TWILIO_VOICE_EN || process.env.TWILIO_VOICE ||
 const SPANISH_VOICE = process.env.TWILIO_VOICE_ES || "Polly.Mia";
 const ENGLISH_LANGUAGE = "en-US";
 const SPANISH_LANGUAGE = "es-MX";
-
 const VAPI_WEBHOOK_SECRET = process.env.VAPI_WEBHOOK_SECRET;
+
+const sessions = new Map();
+const callStates = new Map();
 
 const SAUCE_ALIASES = [
   { keys: ["al pastor", "pastor"], value: "al pastor" },
@@ -30,7 +32,7 @@ const SAUCE_ALIASES = [
   { keys: ["green chile", "green chili", "chile verde"], value: "green chile" },
   { keys: ["sweet and spicy", "sweet & spicy", "dulce y picosa", "dulce y picante"], value: "sweet and spicy" },
   { keys: ["citrus chipotle", "chipotle citrico", "chipotle cítrico"], value: "citrus chipotle" },
-  { keys: ["bbq chiltepin", "barbecue chiltepin", "barbeque chiltepin", "barbacoa chiltepin"], value: "bbq chiltepin" },
+  { keys: ["bbq chiltepin", "barbecue chiltepin", "barbeque chiltepin", "barbacoa chiltepin"], value: "barbeque chiltepin" },
   { keys: ["chocolate chiltepin"], value: "chocolate chiltepin" },
   { keys: ["cinnamon roll", "canela"], value: "cinnamon roll" },
   { keys: ["chorizo"], value: "chorizo" },
@@ -83,7 +85,7 @@ const ITEM_ALIASES = [
 
   { keys: ["ribs", "korean ribs", "korean style ribs", "costillas"], value: "ribs" },
 
-  { keys: ["junior flyin fries", "flyin fries", "flyin’ fries", "flyin fries", "flying fries"], value: "junior flyin fries" },
+  { keys: ["junior flyin fries", "flyin fries", "flyin’ fries", "flying fries"], value: "junior flyin fries" },
   { keys: ["pork belly fries"], value: "pork belly fries" },
   { keys: ["chicken parmesan fries", "chicken parm fries"], value: "chicken parmesan fries" },
   { keys: ["buffalo ranch fries"], value: "buffalo ranch fries" },
@@ -129,92 +131,6 @@ const REMOVAL_ALIASES = [
   { keys: ["on the side", "aparte", "a un lado", "por separado"], value: "on the side" }
 ];
 
-const sessions = new Map();
-const callStates = new Map();
-
-function blankOrder() {
-  return {
-    itemType: null,
-    quantity: null,
-    size: null,
-    sauces: [],
-    sauceOnSide: false,
-    noSauce: false,
-    countedSauceParts: [],
-    pendingCountedSauceConfirmation: false,
-    pendingMixedSauceCharge: false,
-    pendingLemonPepperConfirmation: false,
-    pendingFlyinFriesClarification: false,
-    flyinFriesClarifiedOnce: false,
-
-    includedDips: [],
-    extraDips: [],
-    dressing: null,
-
-    comboSide: null,
-    drink: null,
-
-    protein: null,
-    chickenStyle: null,
-
-    modifiersToRemove: [],
-    modifiersOnSide: [],
-    notes: [],
-
-    name: null
-  };
-}
-
-function getSession(callSid) {
-  if (!sessions.has(callSid)) {
-    sessions.set(callSid, {
-      stage: "language",
-      languageMode: "unknown",
-      languageLocked: false,
-      lastPrompt: "",
-      hold: false,
-      reprompts: 0,
-      order: blankOrder(),
-      completedItems: [],
-      orderName: null,
-      upsellOffered: false
-    });
-  }
-  return sessions.get(callSid);
-}
-
-function resetSession(session) {
-  session.stage = "language";
-  session.languageMode = "unknown";
-  session.languageLocked = false;
-  session.lastPrompt = "";
-  session.hold = false;
-  session.reprompts = 0;
-  session.order = blankOrder();
-  session.completedItems = [];
-  session.orderName = null;
-  session.upsellOffered = false;
-}
-
-function getOrCreateCallState(callId) {
-  if (!callStates.has(callId)) {
-    callStates.set(callId, {
-      language: "unknown",
-      languageLocked: false,
-      customerName: null,
-      items: [],
-      currentItem: null,
-      stage: "ordering",
-      flags: {
-        saucesConfirmed: false,
-        dipsOffered: false,
-        upsellOffered: false
-      }
-    });
-  }
-  return callStates.get(callId);
-}
-
 function normalize(text = "") {
   return text
     .toLowerCase()
@@ -223,155 +139,6 @@ function normalize(text = "") {
     .replace(/[.,!?]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
-}
-
-function detectLanguageMode(text = "") {
-  const input = normalize(text);
-
-  const spanishSignals = [
-    "hola", "quiero", "me da", "me das", "para llevar", "pedido", "orden",
-    "alitas", "con hueso", "salsa", "sabor", "nombre", "gracias",
-    "espanol", "hablas espanol", "en espanol"
-  ];
-
-  const englishSignals = [
-    "hi", "hello", "can i get", "i want", "to go", "order", "wings",
-    "bone in", "bone-in", "sauce", "flavor", "name", "thank you", "english", "in english"
-  ];
-
-  let spanishCount = 0;
-  let englishCount = 0;
-
-  for (const word of spanishSignals) {
-    if (input.includes(word)) spanishCount += 1;
-  }
-
-  for (const word of englishSignals) {
-    if (input.includes(word)) englishCount += 1;
-  }
-
-  if (spanishCount >= 2 && englishCount >= 2) return "spanglish";
-  if (spanishCount > englishCount) return "es";
-  if (englishCount > spanishCount) return "en";
-  return "unknown";
-}
-
-function wantsSpanish(text) {
-  return /\b(spanish|espanol|hablas espanol|en espanol)\b/.test(text);
-}
-
-function wantsEnglish(text) {
-  return /\b(english|speak english|hablas ingles|in english|ingles)\b/.test(text);
-}
-
-function storeLanguageFromSpeech(session, speech) {
-  if (wantsSpanish(speech)) {
-    session.languageMode = "es";
-    session.languageLocked = true;
-    return;
-  }
-
-  if (wantsEnglish(speech)) {
-    session.languageMode = "en";
-    session.languageLocked = true;
-    return;
-  }
-
-  if (session.languageLocked) return;
-
-  const detected = detectLanguageMode(speech);
-  if (detected === "unknown") return;
-
-  if (session.languageMode === "unknown") {
-    session.languageMode = detected === "spanglish" ? "es" : detected;
-    return;
-  }
-
-  if (session.languageMode !== "es" && session.languageMode !== "en") {
-    session.languageMode = detected === "spanglish" ? "es" : detected;
-  }
-}
-
-function explicitLockCallLanguage(state, lang) {
-  if (lang !== "es" && lang !== "en") return;
-  state.language = lang;
-  state.languageLocked = true;
-}
-
-function maybeUpdateCallLanguage(state, text = "") {
-  if (wantsSpanish(text)) {
-    explicitLockCallLanguage(state, "es");
-    return;
-  }
-  if (wantsEnglish(text)) {
-    explicitLockCallLanguage(state, "en");
-    return;
-  }
-
-  if (state.languageLocked) return;
-
-  const detected = detectLanguageMode(text);
-  if (detected === "unknown") return;
-
-  if (!state.language || state.language === "unknown") {
-    state.language = detected === "spanglish" ? "es" : detected;
-    return;
-  }
-
-  if (state.language !== "es" && state.language !== "en") {
-    state.language = detected === "spanglish" ? "es" : detected;
-  }
-}
-
-function sayByLanguage(session, english, spanish) {
-  return session.languageMode === "es" ? spanish : english;
-}
-
-function sayForCall(state, english, spanish) {
-  return state.language === "es" ? spanish : english;
-}
-
-function getSpeechConfig(session) {
-  if (session.languageMode === "es") {
-    return { voice: SPANISH_VOICE, language: SPANISH_LANGUAGE };
-  }
-  return { voice: ENGLISH_VOICE, language: ENGLISH_LANGUAGE };
-}
-
-function speak(session, res, message, hangup = false) {
-  const vr = new VoiceResponse();
-  const speechConfig = getSpeechConfig(session);
-
-  if (hangup) {
-    vr.say(speechConfig, message);
-    vr.hangup();
-  } else {
-    const gather = vr.gather({
-      input: "speech",
-      action: "/speech",
-      method: "POST",
-      speechTimeout: "auto",
-      timeout: 5,
-      actionOnEmptyResult: true
-    });
-    gather.say(speechConfig, message);
-  }
-
-  res.type("text/xml").send(vr.toString());
-}
-
-function sayAndStore(session, res, message, hangup = false) {
-  session.lastPrompt = message;
-  if (!hangup) session.reprompts = 0;
-  return speak(session, res, message, hangup);
-}
-
-function reprompt(session, res, fallback) {
-  session.reprompts += 1;
-  if (session.reprompts >= 2) {
-    return sayAndStore(session, res, fallback);
-  }
-  return speak(session, res, session.lastPrompt || fallback);
 }
 
 function findAlias(text, aliasList) {
@@ -511,12 +278,177 @@ function formatName(name) {
     .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+function wantsSpanish(text) {
+  return /\b(spanish|espanol|hablas espanol|en espanol)\b/.test(text);
+}
+
+function wantsEnglish(text) {
+  return /\b(english|speak english|hablas ingles|in english|ingles)\b/.test(text);
+}
+
+function detectLanguageMode(text = "") {
+  const input = normalize(text);
+
+  const spanishSignals = [
+    "hola", "quiero", "me da", "me das", "para llevar", "pedido", "orden",
+    "alitas", "con hueso", "salsa", "sabor", "nombre", "gracias",
+    "espanol", "hablas espanol", "en espanol"
+  ];
+
+  const englishSignals = [
+    "hi", "hello", "can i get", "i want", "to go", "order", "wings",
+    "bone in", "bone-in", "sauce", "flavor", "name", "thank you", "english", "in english"
+  ];
+
+  let spanishCount = 0;
+  let englishCount = 0;
+
+  for (const word of spanishSignals) {
+    if (input.includes(word)) spanishCount += 1;
+  }
+
+  for (const word of englishSignals) {
+    if (input.includes(word)) englishCount += 1;
+  }
+
+  if (spanishCount >= 2 && englishCount >= 2) return "spanglish";
+  if (spanishCount > englishCount) return "es";
+  if (englishCount > spanishCount) return "en";
+  return "unknown";
+}
+
+function sayByLanguage(session, english, spanish) {
+  return session.languageMode === "es" ? spanish : english;
+}
+
+function getSpeechConfig(session) {
+  if (session.languageMode === "es") {
+    return { voice: SPANISH_VOICE, language: SPANISH_LANGUAGE };
+  }
+  return { voice: ENGLISH_VOICE, language: ENGLISH_LANGUAGE };
+}
+
+function blankOrder() {
+  return {
+    itemType: null,
+    quantity: null,
+    size: null,
+    sauces: [],
+    sauceOnSide: false,
+    noSauce: false,
+
+    includedDips: [],
+    extraDips: [],
+    dressing: null,
+    bakedPotatoDrizzle: null,
+
+    comboSide: null,
+    drink: null,
+
+    protein: null,
+    chickenStyle: null,
+
+    modifiersToRemove: [],
+    notes: [],
+
+    comboUpsellAsked: false,
+    comboUpsellAccepted: false,
+    preNameUpsellAsked: false
+  };
+}
+
+function getSession(callSid) {
+  if (!sessions.has(callSid)) {
+    sessions.set(callSid, {
+      stage: "language",
+      languageMode: "unknown",
+      languageLocked: false,
+      lastPrompt: "",
+      reprompts: 0,
+      hold: false,
+      order: blankOrder(),
+      completedItems: [],
+      orderName: null
+    });
+  }
+  return sessions.get(callSid);
+}
+
+function resetSession(session) {
+  session.stage = "language";
+  session.languageMode = "unknown";
+  session.languageLocked = false;
+  session.lastPrompt = "";
+  session.reprompts = 0;
+  session.hold = false;
+  session.order = blankOrder();
+  session.completedItems = [];
+  session.orderName = null;
+}
+
+function storeLanguageFromSpeech(session, speech) {
+  if (wantsSpanish(speech)) {
+    session.languageMode = "es";
+    session.languageLocked = true;
+    return;
+  }
+
+  if (wantsEnglish(speech)) {
+    session.languageMode = "en";
+    session.languageLocked = true;
+    return;
+  }
+
+  if (session.languageLocked) return;
+
+  const detected = detectLanguageMode(speech);
+  if (detected === "unknown") return;
+
+  if (session.languageMode === "unknown") {
+    session.languageMode = detected === "spanglish" ? "es" : detected;
+    return;
+  }
+}
+
+function speak(session, res, message, hangup = false) {
+  const vr = new VoiceResponse();
+  const speechConfig = getSpeechConfig(session);
+
+  if (hangup) {
+    vr.say(speechConfig, message);
+    vr.hangup();
+  } else {
+    const gather = vr.gather({
+      input: "speech",
+      action: "/speech",
+      method: "POST",
+      speechTimeout: "auto",
+      timeout: 4,
+      actionOnEmptyResult: true
+    });
+    gather.say(speechConfig, message);
+  }
+
+  res.type("text/xml").send(vr.toString());
+}
+
+function sayAndStore(session, res, message, hangup = false) {
+  session.lastPrompt = message;
+  if (!hangup) session.reprompts = 0;
+  return speak(session, res, message, hangup);
+}
+
+function reprompt(session, res, fallback) {
+  session.reprompts += 1;
+  return speak(session, res, session.lastPrompt || fallback);
+}
+
 function isYes(text) {
-  return /\b(yes|yeah|yep|sure|okay|ok|sounds good|that works|go ahead|correct|si|correcto|claro|dale|esta bien|asi es|sale|va)\b/.test(text);
+  return /\b(yes|yeah|yep|sure|okay|ok|sounds good|that works|go ahead|correct|si|sí|correcto|claro|dale|esta bien|está bien|asi es|así es|sale|va)\b/.test(text);
 }
 
 function isNo(text) {
-  return /\b(no|nope|nah|nothing else|thats all|that s all|no thank you|just that|im good|i m good|nada mas|solo eso|con eso|no gracias)\b/.test(text);
+  return /\b(no|nope|nah|nothing else|thats all|that s all|no thank you|just that|im good|i m good|nada mas|nada más|solo eso|con eso|no gracias)\b/.test(text);
 }
 
 function wantsRepeat(text) {
@@ -539,24 +471,28 @@ function mentionsAlcohol(text) {
   return /\b(beer|cerveza|alcohol|modelo|bud light|coors|corona|wine|vino|whiskey|tequila|vodka)\b/.test(text);
 }
 
-function wantsChangeSauce(text) {
-  return /\b(change the sauce|different sauce|switch the sauce|another sauce|make that|instead|cambia la salsa|otra salsa|mejor)\b/.test(text);
-}
-
-function wantsAllSameDip(text) {
-  return /\b(all ranch|just ranch|all blue cheese|just blue cheese|todo ranch|todo blue cheese|solo ranch|solo blue cheese)\b/.test(text);
-}
-
-function mentionsLemonPepper(text) {
-  return /\b(lemon pepper|lemon)\b/.test(text);
-}
-
 function wantsAnotherItem(text) {
   return /\b(and also|also|add|another|otra cosa|agrega|agrega|tambien|también)\b/.test(text);
 }
 
 function wantsBuffaloBurger(text) {
   return /\b(buffalo burger)\b/.test(text);
+}
+
+function wantsChangeSauce(text) {
+  return /\b(change the sauce|different sauce|switch the sauce|another sauce|make that|instead|cambia la salsa|otra salsa|mejor)\b/.test(text);
+}
+
+function wantsSideUpsell(text) {
+  return /\b(ranch|extra ranch|mac bites|corn ribs|mozzarella sticks|onion rings|flyin corn|fries|papas|mozzarella|mac|corn|rings)\b/.test(text);
+}
+
+function addNotesForBuffaloBurger(order) {
+  order.itemType = "buffalo burger request";
+  order.notes.push("Use classic burger combo");
+  order.notes.push("Remove mayo");
+  order.notes.push("Sub ranch for mayo");
+  order.notes.push("Add mild buffalo sauce side charge");
 }
 
 function sauceSlotsAllowed(order) {
@@ -592,17 +528,22 @@ function dipSlotsAllowed(order) {
   return 0;
 }
 
-function needsSauce(order) {
-  if (order.noSauce) return false;
-  return sauceSlotsAllowed(order) > 0;
+function comboNeedsSide(order) {
+  return [
+    "8 wings combo",
+    "8 boneless combo",
+    "half rack combo",
+    "half rack and 4 bone in combo",
+    "fish combo",
+    "classic burger combo",
+    "chicken sandwich combo",
+    "flyin burger combo",
+    "buffalo burger request"
+  ].includes(order.itemType);
 }
 
-function needsDip(order) {
-  return dipSlotsAllowed(order) > 0;
-}
-
-function needsDressing(order) {
-  return ["house salad", "flyin salad"].includes(order.itemType);
+function comboNeedsDrink(order) {
+  return order.itemType === "baked potato combo";
 }
 
 function needsProtein(order) {
@@ -617,48 +558,29 @@ function needsChickenStyle(order) {
   return false;
 }
 
-function comboNeedsSide(order) {
-  return [
-    "8 wings combo",
-    "8 boneless combo",
-    "half rack combo",
-    "half rack and 4 bone in combo",
-    "fish combo",
-    "classic burger combo",
-    "chicken sandwich combo",
-    "flyin burger combo"
-  ].includes(order.itemType);
+function needsSauce(order) {
+  if (order.noSauce) return false;
+  return sauceSlotsAllowed(order) > 0;
 }
 
-function comboNeedsDrink(order) {
+function needsDressing(order) {
+  return ["house salad", "flyin salad"].includes(order.itemType);
+}
+
+function needsDip(order) {
+  return dipSlotsAllowed(order) > 0;
+}
+
+function needsBakedPotatoDrizzle(order) {
   return order.itemType === "baked potato combo";
-}
-
-function fishNeedsBaseChoice(order) {
-  return order.itemType === "fish combo";
-}
-
-function fishChoiceIsValid(order) {
-  return ["regular fries", "sweet potato fries", "potato salad"].includes(order.comboSide || "");
 }
 
 function bakedPotatoDrinkAllowed(order) {
   return ["soft drink", "bottled water"].includes(order.drink || "");
 }
 
-function isRegularComboAutoDrink(order) {
-  return [
-    "8 wings combo",
-    "8 boneless combo",
-    "half rack combo",
-    "half rack and 4 bone in combo",
-    "classic burger combo",
-    "chicken sandwich combo",
-    "flyin burger combo",
-    "kids boneless",
-    "kids wings",
-    "kids cheeseburger"
-  ].includes(order.itemType);
+function fishChoiceIsValid(order) {
+  return ["regular fries", "sweet potato fries", "potato salad", "tostones", "yuca fries"].includes(order.comboSide || "");
 }
 
 function upsellOpportunity(order) {
@@ -675,20 +597,20 @@ function itemTypeDisplay(order, lang = "en") {
     const map = {
       wings: "alitas con hueso",
       boneless: "boneless",
-      ribs: order.size === "full rack" ? "rack completo de Korean style ribs" : "media orden de Korean style ribs",
-      "junior flyin fries": "Flyin’ Fries",
+      ribs: order.size === "full rack" ? "rack completo de korean style ribs" : "media orden de korean style ribs",
+      "junior flyin fries": "flyin fries",
       "pork belly fries": "pork belly fries",
       "chicken parmesan fries": "chicken parmesan fries",
-      "buffalo ranch fries": "Buffalo Ranch Fries",
-      "house salad": "House Salad",
-      "flyin salad": "Flyin’ Salad",
+      "buffalo ranch fries": "buffalo ranch fries",
+      "house salad": "house salad",
+      "flyin salad": "flyin salad",
       "pork belly": "pork belly",
       "mac bites": "mac bites",
       "onion rings": "onion rings",
-      "flyin corn": "Flyin’ Corn",
+      "flyin corn": "flyin corn",
       "corn ribs": "corn ribs",
       "mozzarella sticks": "mozzarella sticks",
-      "sampler platter": "Sampler Platter",
+      "sampler platter": "sampler platter",
       "kids boneless": "kids de 4 boneless",
       "kids wings": "kids de 4 alitas",
       "kids cheeseburger": "kids cheeseburger",
@@ -696,12 +618,12 @@ function itemTypeDisplay(order, lang = "en") {
       "8 boneless combo": "combo de 8 boneless",
       "half rack combo": "combo de media costilla",
       "half rack and 4 bone in combo": "combo de media costilla y 4 alitas",
-      "fish combo": "4 piezas de pescado con papas",
+      "fish combo": "combo de pescado",
       "classic burger combo": "combo de classic burger",
       "chicken sandwich combo": "combo de chicken sandwich",
-      "flyin burger combo": "combo de Flyin’ Burger",
+      "flyin burger combo": "combo de flyin burger",
       "baked potato combo": "combo de baked potato",
-      "buffalo burger request": "buffalo burger combo especial"
+      "buffalo burger request": "combo buffalo burger"
     };
     return map[item] || item;
   }
@@ -709,20 +631,20 @@ function itemTypeDisplay(order, lang = "en") {
   const map = {
     wings: "bone-in wings",
     boneless: "boneless",
-    ribs: order.size === "full rack" ? "full rack Korean style ribs" : "half rack Korean style ribs",
-    "junior flyin fries": "Flyin’ Fries",
+    ribs: order.size === "full rack" ? "full rack korean style ribs" : "half rack korean style ribs",
+    "junior flyin fries": "flyin fries",
     "pork belly fries": "pork belly fries",
     "chicken parmesan fries": "chicken parmesan fries",
-    "buffalo ranch fries": "Buffalo Ranch Fries",
-    "house salad": "House Salad",
-    "flyin salad": "Flyin’ Salad",
+    "buffalo ranch fries": "buffalo ranch fries",
+    "house salad": "house salad",
+    "flyin salad": "flyin salad",
     "pork belly": "pork belly",
     "mac bites": "mac bites",
     "onion rings": "onion rings",
-    "flyin corn": "Flyin’ Corn",
+    "flyin corn": "flyin corn",
     "corn ribs": "corn ribs",
     "mozzarella sticks": "mozzarella sticks",
-    "sampler platter": "Sampler Platter",
+    "sampler platter": "sampler platter",
     "kids boneless": "kids 4 boneless",
     "kids wings": "kids 4 classic wings",
     "kids cheeseburger": "kids cheeseburger",
@@ -730,12 +652,12 @@ function itemTypeDisplay(order, lang = "en") {
     "8 boneless combo": "8 boneless combo",
     "half rack combo": "half rack combo",
     "half rack and 4 bone in combo": "half rack and 4 bone-in combo",
-    "fish combo": "4 pieces fish and fries",
+    "fish combo": "fish combo",
     "classic burger combo": "classic burger combo",
     "chicken sandwich combo": "chicken sandwich combo",
-    "flyin burger combo": "Flyin’ Burger combo",
-    "baked potato combo": "Flyin’ baked potato combo",
-    "buffalo burger request": "buffalo burger combo special build"
+    "flyin burger combo": "flyin burger combo",
+    "baked potato combo": "flyin baked potato combo",
+    "buffalo burger request": "buffalo burger combo"
   };
   return map[item] || item;
 }
@@ -749,14 +671,11 @@ function countByType(list) {
 function dipSummary(list) {
   const counts = countByType(list);
   return Object.entries(counts)
-    .map(([type, qty]) => `${qty} ${type}${qty > 1 ? (type === "ranch" ? "es" : "") : ""}`)
+    .map(([type, qty]) => `${qty} ${type}`)
     .join(", ");
 }
 
 function sauceSummary(order) {
-  if (order.countedSauceParts.length) {
-    return order.countedSauceParts.map(({ sauce, count }) => `${count} ${sauce}`).join(" and ");
-  }
   if (order.noSauce) return "no sauce";
   if (!order.sauces.length) return "";
   if (order.sauces.length === 1) return order.sauces[0];
@@ -776,20 +695,6 @@ function addSpecificIncludedDips(order, dips) {
     if (order.includedDips.length >= max) break;
     order.includedDips.push(dip);
   }
-}
-
-function addExtraDip(order, dipType, qty = 1) {
-  for (let i = 0; i < qty; i += 1) {
-    order.extraDips.push(dipType);
-  }
-}
-
-function addNotesForBuffaloBurger(order) {
-  order.itemType = "buffalo burger request";
-  order.notes.push("Use classic burger combo");
-  order.notes.push("Remove mayo");
-  order.notes.push("Sub ranch for mayo");
-  order.notes.push("Add buffalo sauce side charge");
 }
 
 function detectInitialOrder(text, order) {
@@ -818,9 +723,6 @@ function detectInitialOrder(text, order) {
     order.sauces = sauces;
     if (extractOnSideRequested(text)) order.sauceOnSide = true;
     if (/\b(no sauce|sin salsa)\b/.test(text)) order.noSauce = true;
-    if (mentionsLemonPepper(text) && order.sauces.includes("lime pepper")) {
-      order.pendingLemonPepperConfirmation = true;
-    }
     return;
   }
 
@@ -837,8 +739,8 @@ function detectInitialOrder(text, order) {
   if (item) {
     order.itemType = item;
     order.quantity = number || 1;
-    order.size = rackSize;
-    order.sauces = sauces;
+    order.size = rackSize || order.size;
+    order.sauces = sauces.length ? sauces : order.sauces;
     order.includedDips = dips.length ? dips : order.includedDips;
     order.dressing = dressing || order.dressing;
     order.comboSide = side || order.comboSide;
@@ -850,80 +752,69 @@ function detectInitialOrder(text, order) {
     if (extractOnSideRequested(text)) order.sauceOnSide = true;
     if (/\b(no sauce|sin salsa)\b/.test(text)) order.noSauce = true;
 
-    if (mentionsLemonPepper(text) && order.sauces.includes("lime pepper")) {
-      order.pendingLemonPepperConfirmation = true;
-    }
-
     if (item === "buffalo ranch fries" && !order.comboSide) {
       order.comboSide = "regular fries";
     }
-
     if (item === "half rack combo") {
       order.size = "half rack";
     }
   }
 }
 
-function missingField(order) {
-  if (!order.itemType) return "item";
-
-  if ((order.itemType === "wings" || order.itemType === "boneless") && !order.quantity) return "quantity";
-
-  if (order.itemType === "ribs" && !order.size) return "size";
-
-  if (needsProtein(order) && !order.protein) return "protein";
-
-  if (needsChickenStyle(order) && !order.chickenStyle) return "chickenStyle";
-
-  if (needsSauce(order) && !order.sauces.length) return "sauce";
-
-  if (needsDressing(order) && !order.dressing) return "dressing";
-
-  if (needsDip(order) && !order.includedDips.length) return "dip";
-
-  if (comboNeedsSide(order) && !order.comboSide) return "comboSide";
-
-  if (fishNeedsBaseChoice(order) && !fishChoiceIsValid(order)) return "fishSide";
-
-  if (comboNeedsDrink(order) && !order.drink) return "bakedPotatoDrink";
-
-  if (order.itemType === "baked potato combo" && !bakedPotatoDrinkAllowed(order)) return "bakedPotatoDrink";
-
-  return null;
-}
-
 function burgerIngredientLine(session, order) {
   if (order.itemType === "classic burger combo") {
     return sayByLanguage(
       session,
-      "That comes with cheese, mayo, onion, tomato and pickles. Any changes?",
-      "Trae queso, mayo, cebolla, tomate y pickles. ¿Algún cambio?"
+      "That comes with cheese, mayo, lettuce, onion, tomato, and pickles. Any changes?",
+      "Trae queso, mayo, lechuga, cebolla, tomate y pickles. ¿Algún cambio?"
     );
   }
 
   if (order.itemType === "chicken sandwich combo") {
     return sayByLanguage(
       session,
-      "That comes with cheese, mayo, onion, tomato and pickles. Any changes?",
-      "Trae queso, mayo, cebolla, tomate y pickles. ¿Algún cambio?"
+      "That comes with cheese, mayo, lettuce, onion, tomato, and pickles. Any changes?",
+      "Trae queso, mayo, lechuga, cebolla, tomate y pickles. ¿Algún cambio?"
     );
   }
 
   if (order.itemType === "flyin burger combo") {
     return sayByLanguage(
       session,
-      "That comes with cheese, mayo, chipotle ranch, onion, tomato and pickles. Any changes?",
-      "Trae queso, mayo, chipotle ranch, cebolla, tomate y pickles. ¿Algún cambio?"
+      "That comes with cheese, mayo, chipotle ranch, lettuce, onion, tomato, and pickles. Any changes?",
+      "Trae queso, mayo, chipotle ranch, lechuga, cebolla, tomate y pickles. ¿Algún cambio?"
     );
   }
 
   if (order.itemType === "buffalo burger request") {
     return sayByLanguage(
       session,
-      "I can do that as a classic burger combo with ranch instead of mayo and buffalo sauce on the side for an extra charge. Is that okay?",
-      "Sí te lo puedo hacer como classic burger combo con ranch en lugar de mayo y buffalo sauce al lado con cargo extra. ¿Está bien?"
+      "Perfect. That comes with cheese, buffalo sauce, ranch, lettuce, onion, tomato, and pickles. Any changes?",
+      "Perfecto. Trae queso, buffalo sauce, ranch, lechuga, cebolla, tomate y pickles. ¿Algún cambio?"
     );
   }
+
+  return null;
+}
+
+function missingField(order) {
+  if (!order.itemType) return "item";
+
+  if ((order.itemType === "wings" || order.itemType === "boneless") && !order.quantity) return "quantity";
+  if (order.itemType === "ribs" && !order.size) return "size";
+
+  if (needsProtein(order) && !order.protein) return "protein";
+  if (needsChickenStyle(order) && !order.chickenStyle) return "chickenStyle";
+  if (needsSauce(order) && !order.sauces.length) return "sauce";
+  if (needsDressing(order) && !order.dressing) return "dressing";
+  if (needsDip(order) && !order.includedDips.length) return "dip";
+  if (comboNeedsSide(order) && !order.comboSide) return "comboSide";
+
+  if (order.itemType === "fish combo" && !fishChoiceIsValid(order)) return "fishSide";
+
+  if (needsBakedPotatoDrizzle(order) && !order.bakedPotatoDrizzle) return "bakedPotatoDrizzle";
+  if (comboNeedsDrink(order) && !order.drink) return "bakedPotatoDrink";
+  if (order.itemType === "baked potato combo" && !bakedPotatoDrinkAllowed(order)) return "bakedPotatoDrink";
 
   return null;
 }
@@ -946,8 +837,8 @@ function nextPromptForMissing(session, order) {
   if (missing === "protein") {
     return sayByLanguage(
       session,
-      "For the baked potato combo, chicken, steak, pork belly, or no protein?",
-      "Para el baked potato combo, ¿chicken, steak, pork belly o sin proteína?"
+      "For the baked potato combo: chicken, steak, pork belly, or no protein?",
+      "Para el baked potato combo: ¿chicken, steak, pork belly o sin proteína?"
     );
   }
 
@@ -967,16 +858,16 @@ function nextPromptForMissing(session, order) {
     if (order.itemType === "pork belly") {
       return sayByLanguage(
         session,
-        "What sauce do you want? Green chile and bbq chiltepin are popular.",
-        "¿Qué salsa quieres? Green chile y bbq chiltepin son muy pedidos."
+        "What sauce do you want? Green chile and barbeque chiltepin are popular.",
+        "¿Qué salsa quieres? Green chile y barbeque chiltepin son muy pedidos."
       );
     }
 
     if (order.itemType === "ribs" || order.itemType === "half rack combo") {
       return sayByLanguage(
         session,
-        "What sauce do you want? Green chile, bbq chiltepin, and mango habanero are popular.",
-        "¿Qué salsa quieres? Green chile, bbq chiltepin y mango habanero son muy pedidos."
+        "What sauce do you want? Green chile, barbeque chiltepin, or mango habanero are popular.",
+        "¿Qué salsa quieres? Green chile, barbeque chiltepin o mango habanero son muy pedidos."
       );
     }
 
@@ -996,7 +887,7 @@ function nextPromptForMissing(session, order) {
       );
     }
 
-    return sayByLanguage(session, "What sauce do you want?", "¿Qué sabor quieres?");
+    return sayByLanguage(session, "What sauce do you want?", "¿Qué salsa quieres?");
   }
 
   if (missing === "dressing") {
@@ -1026,8 +917,16 @@ function nextPromptForMissing(session, order) {
   if (missing === "fishSide") {
     return sayByLanguage(
       session,
-      "Regular fries, sweet potato fries, or potato salad instead?",
-      "¿Papas regulares, papas de camote o potato salad en lugar?"
+      "Regular fries, sweet potato fries, potato salad, yuca fries, or tostones?",
+      "¿Papas regulares, papas de camote, potato salad, yuca fries o tostones?"
+    );
+  }
+
+  if (missing === "bakedPotatoDrizzle") {
+    return sayByLanguage(
+      session,
+      "What drizzle do you want on top? Ranch, blue cheese, chipotle ranch, or jalapeño ranch?",
+      "¿Qué drizzle quieres arriba? ¿Ranch, blue cheese, chipotle ranch o jalapeño ranch?"
     );
   }
 
@@ -1053,35 +952,21 @@ function summaryForConfirmation(order, lang = "en") {
 
   if (order.sauces.length || order.noSauce) {
     if (lang === "es") {
-      if (order.noSauce) {
-        parts.push("sin salsa");
-      } else {
-        parts.push(order.sauceOnSide ? `${sauceSummary(order)} aparte` : sauceSummary(order));
-      }
+      parts.push(order.noSauce ? "sin salsa" : `${sauceSummary(order)}${order.sauceOnSide ? " aparte" : ""}`);
     } else {
-      if (order.noSauce) {
-        parts.push("no sauce");
-      } else {
-        parts.push(order.sauceOnSide ? `${sauceSummary(order)} on the side` : sauceSummary(order));
-      }
+      parts.push(order.noSauce ? "no sauce" : `${sauceSummary(order)}${order.sauceOnSide ? " on the side" : ""}`);
     }
   }
 
   if (order.dressing) parts.push(lang === "es" ? `aderezo ${order.dressing}` : `dressing ${order.dressing}`);
+  if (order.bakedPotatoDrizzle) parts.push(lang === "es" ? `drizzle ${order.bakedPotatoDrizzle}` : `drizzle ${order.bakedPotatoDrizzle}`);
   if (order.includedDips.length) parts.push(dipSummary(order.includedDips));
-  if (order.extraDips.length) parts.push(`extra ${dipSummary(order.extraDips)}`);
+  if (order.extraDips.length) parts.push(lang === "es" ? `extra ${dipSummary(order.extraDips)}` : `extra ${dipSummary(order.extraDips)}`);
   if (order.comboSide) parts.push(order.comboSide);
-
-  if (order.itemType === "baked potato combo" && order.drink) {
-    parts.push(order.drink);
-  }
+  if (order.drink) parts.push(order.drink);
 
   if (order.protein) {
-    if (order.protein === "no protein") {
-      parts.push(lang === "es" ? "sin proteína" : "no protein");
-    } else {
-      parts.push(order.protein);
-    }
+    parts.push(order.protein === "no protein" ? (lang === "es" ? "sin proteína" : "no protein") : order.protein);
   }
 
   if (order.chickenStyle) {
@@ -1089,15 +974,7 @@ function summaryForConfirmation(order, lang = "en") {
   }
 
   if (order.modifiersToRemove.length) {
-    if (lang === "es") {
-      parts.push(`sin ${order.modifiersToRemove.map((x) => x.replace(/^no /, "")).join(", ")}`);
-    } else {
-      parts.push(order.modifiersToRemove.join(", "));
-    }
-  }
-
-  if (order.notes.length) {
-    parts.push(lang === "es" ? "con nota para cocina" : "with kitchen note");
+    parts.push(lang === "es" ? `sin ${order.modifiersToRemove.map((x) => x.replace(/^no /, "")).join(", ")}` : order.modifiersToRemove.join(", "));
   }
 
   return parts.join(", ");
@@ -1108,44 +985,16 @@ function summarizeCompletedItems(session) {
   return session.completedItems.map((item) => summaryForConfirmation(item, lang)).join("; ");
 }
 
-function lemonPepperPrompt(session) {
-  return sayByLanguage(
-    session,
-    "We have that as lime pepper here. Keep it or change it?",
-    "Aquí la tenemos como laim pepper. ¿La dejamos así o la cambias?"
-  );
-}
-
-function flyinFriesClarificationPrompt(session) {
-  return sayByLanguage(
-    session,
-    "You mean the Flyin’ Fries with boneless on top?",
-    "¿Te refieres a las Flyin’ Fries que llevan boneless arriba?"
-  );
-}
-
-function countedSauceConfirmationPrompt(session, order) {
-  const total = order.countedSauceParts.reduce((sum, item) => sum + item.count, 0);
-  return sayByLanguage(
-    session,
-    `I have ${sauceSummary(order)}, total ${total}. Right?`,
-    `Tengo ${sauceSummary(order)}, total ${total}. ¿Así está bien?`
-  );
-}
-
-function mixedSauceChargePrompt(session) {
-  return sayByLanguage(
-    session,
-    "That mix can be done, but it adds an extra sauce charge. Keep it like that?",
-    "Sí se puede, pero lleva cargo por salsa extra. ¿Así lo dejamos?"
-  );
+function finalizeCurrentItem(session) {
+  session.completedItems.push(JSON.parse(JSON.stringify(session.order)));
+  session.order = blankOrder();
 }
 
 function oneItemAtATimeLine(session) {
   return sayByLanguage(
     session,
-    "I’ll help you one item at a time so we can make sure everything comes out right.",
-    "Te ayudo una orden a la vez para asegurar que todo salga correcto."
+    "I’ll help you one item at a time so everything comes out right.",
+    "Te ayudo una orden a la vez para que todo salga bien."
   );
 }
 
@@ -1154,6 +1003,30 @@ function askNextItemLine(session) {
     session,
     "Perfect. What would you like to add next?",
     "Perfecto. ¿Qué más te agrego?"
+  );
+}
+
+function preNameUpsellLine(session) {
+  return sayByLanguage(
+    session,
+    "Want to add any sides or extra ranch before I put the name on it?",
+    "¿Quieres agregar algún side o ranch extra antes del nombre?"
+  );
+}
+
+function comboUpsellLine(session) {
+  return sayByLanguage(
+    session,
+    "You can make that a combo with a side and drink. Want to do that?",
+    "Eso lo puedes hacer combo con side y drink. ¿Lo quieres así?"
+  );
+}
+
+function lemonPepperPrompt(session) {
+  return sayByLanguage(
+    session,
+    "We have that as lime pepper here. Keep it or change it?",
+    "Aquí la tenemos como lime pepper. ¿La dejamos así o la cambias?"
   );
 }
 
@@ -1170,7 +1043,7 @@ function handleInterruptions(session, speech, res) {
 
   if (wantsHold(speech)) {
     session.hold = true;
-    return sayAndStore(session, res, sayByLanguage(session, "Of course. Just say ready when you’re set.", "Claro. Nomás dime listo cuando estés."));
+    return sayAndStore(session, res, sayByLanguage(session, "Sure. Just say ready when you’re set.", "Claro. Nomás dime listo cuando estés."));
   }
 
   if (session.hold) {
@@ -1178,7 +1051,7 @@ function handleInterruptions(session, speech, res) {
       session.hold = false;
       return sayAndStore(session, res, sayByLanguage(session, "Perfect. Go ahead.", "Perfecto. Adelante."));
     }
-    return speak(session, res, sayByLanguage(session, "No rush. Just say ready when you’re set.", "Sin prisa. Dime listo cuando quieras seguir."));
+    return speak(session, res, sayByLanguage(session, "No rush. Say ready when you want to keep going.", "Sin prisa. Dime listo cuando quieras seguir."));
   }
 
   if (mentionsAlcohol(speech)) {
@@ -1198,28 +1071,73 @@ function detectRemovalsIntoOrder(order, speech) {
   }
 }
 
-function finalizeCurrentItem(session) {
-  session.completedItems.push(JSON.parse(JSON.stringify(session.order)));
-  session.order = blankOrder();
-}
+function maybeHandleDirectOrderUpdates(session, speech) {
+  const sauces = extractSauces(speech);
+  const dips = extractDips(speech);
+  const dressing = extractDressing(speech);
+  const side = extractSide(speech);
+  const drink = extractDrink(speech);
+  const protein = extractProtein(speech);
+  const chickenStyle = extractChickenStyle(speech);
 
-function getLatestCustomerText(message) {
-  const msgs = message?.artifact?.messages;
-  if (Array.isArray(msgs)) {
-    for (let i = msgs.length - 1; i >= 0; i -= 1) {
-      const msg = msgs[i];
-      if (msg?.role === "user" && typeof msg?.message === "string") {
-        return msg.message;
-      }
-    }
+  if (sauces.length) session.order.sauces = sauces;
+  if (dips.length && needsDip(session.order) && !session.order.includedDips.length) session.order.includedDips = dips;
+  if (dressing && needsDressing(session.order)) session.order.dressing = dressing;
+  if (side && comboNeedsSide(session.order)) session.order.comboSide = side;
+  if (drink && comboNeedsDrink(session.order)) session.order.drink = drink;
+  if (protein && needsProtein(session.order)) session.order.protein = protein;
+  if (chickenStyle && needsChickenStyle(session.order)) session.order.chickenStyle = chickenStyle;
+
+  if (session.order.itemType === "baked potato combo" && dips.length && !session.order.bakedPotatoDrizzle) {
+    session.order.bakedPotatoDrizzle = dips[0];
   }
-
-  if (typeof message?.customer?.message === "string") return message.customer.message;
-  if (typeof message?.transcript === "string") return message.transcript;
-  return "";
 }
 
-// Vapi tools kept for core wings/boneless flow
+function getOrCreateCallState(callId) {
+  if (!callStates.has(callId)) {
+    callStates.set(callId, {
+      language: "unknown",
+      languageLocked: false,
+      customerName: null,
+      items: [],
+      currentItem: null,
+      stage: "ordering",
+      flags: {
+        saucesConfirmed: false,
+        dipsOffered: false,
+        upsellOffered: false
+      }
+    });
+  }
+  return callStates.get(callId);
+}
+
+function explicitLockCallLanguage(state, lang) {
+  if (lang !== "es" && lang !== "en") return;
+  state.language = lang;
+  state.languageLocked = true;
+}
+
+function maybeUpdateCallLanguage(state, text = "") {
+  if (wantsSpanish(text)) {
+    explicitLockCallLanguage(state, "es");
+    return;
+  }
+  if (wantsEnglish(text)) {
+    explicitLockCallLanguage(state, "en");
+    return;
+  }
+  if (state.languageLocked) return;
+
+  const detected = detectLanguageMode(text);
+  if (detected === "unknown") return;
+  state.language = detected === "spanglish" ? "es" : detected;
+}
+
+function sayForCall(state, english, spanish) {
+  return state.language === "es" ? spanish : english;
+}
+
 function qtyToAllowedSauces(quantity) {
   return Math.floor(quantity / 6);
 }
@@ -1268,20 +1186,27 @@ function summarizeItemsForCall(state) {
   return state.items
     .map((item) => {
       const base = `${item.quantity} ${itemTypeLabel(item.type, lang)}`;
-      const sauces = item.sauces.length
-        ? lang === "es"
-          ? `, salsas: ${item.sauces.join(" y ")}`
-          : `, ${item.sauces.join(" and ")}`
-        : "";
-      const extras = item.extraDips.length
-        ? lang === "es"
-          ? `, aderezos extra: ${item.extraDips.join(" y ")}`
-          : `, extra dips: ${item.extraDips.join(" and ")}`
-        : "";
+      const sauces = item.sauces.length ? (lang === "es" ? `, salsas: ${item.sauces.join(" y ")}` : `, ${item.sauces.join(" and ")}`) : "";
+      const extras = item.extraDips.length ? (lang === "es" ? `, extra: ${item.extraDips.join(" y ")}` : `, extra dips: ${item.extraDips.join(" and ")}`) : "";
       const side = item.side ? `, side: ${item.side}` : "";
       return `${base}${sauces}${extras}${side}`;
     })
     .join("; ");
+}
+
+function getLatestCustomerText(message) {
+  const msgs = message?.artifact?.messages;
+  if (Array.isArray(msgs)) {
+    for (let i = msgs.length - 1; i >= 0; i -= 1) {
+      const msg = msgs[i];
+      if (msg?.role === "user" && typeof msg?.message === "string") {
+        return msg.message;
+      }
+    }
+  }
+  if (typeof message?.customer?.message === "string") return message.customer.message;
+  if (typeof message?.transcript === "string") return message.transcript;
+  return "";
 }
 
 app.get("/", (req, res) => {
@@ -1330,11 +1255,7 @@ app.post("/vapi/tools", async (req, res) => {
             results.push(
               toolResult(name, toolCallId, {
                 ok: false,
-                speak: sayForCall(
-                  state,
-                  "I missed part of that. Bone-in or boneless, and how many?",
-                  "No alcancé bien esa parte. ¿Con hueso o boneless, y cuántas?"
-                )
+                speak: sayForCall(state, "Bone-in or boneless, and how many?", "¿Con hueso o boneless, y cuántas?")
               })
             );
             break;
@@ -1347,8 +1268,8 @@ app.post("/vapi/tools", async (req, res) => {
               ok: true,
               speak: sayForCall(
                 state,
-                `Got you. What sauces do you want? You can do up to ${state.currentItem.allowedSauces}.`,
-                `Perfecto. ¿Qué sabores quieres? Puedes escoger hasta ${state.currentItem.allowedSauces} salsas.`
+                `Got it. What sauce do you want? You can do up to ${state.currentItem.allowedSauces}.`,
+                `Perfecto. ¿Qué salsa quieres? Puedes escoger hasta ${state.currentItem.allowedSauces}.`
               )
             })
           );
@@ -1359,12 +1280,7 @@ app.post("/vapi/tools", async (req, res) => {
           const newQuantity = Number(parameters.newQuantity || parameters.quantity);
 
           if (!state.currentItem) {
-            results.push(
-              toolResult(name, toolCallId, {
-                ok: false,
-                speak: sayForCall(state, "Which order are we updating?", "¿Cuál orden estamos cambiando?")
-              })
-            );
+            results.push(toolResult(name, toolCallId, { ok: false, speak: sayForCall(state, "Which item are we updating?", "¿Qué item estamos cambiando?") }));
             break;
           }
 
@@ -1372,11 +1288,7 @@ app.post("/vapi/tools", async (req, res) => {
             results.push(
               toolResult(name, toolCallId, {
                 ok: false,
-                speak: sayForCall(
-                  state,
-                  "That doesn’t match our wing sizes. We have 6, 9, 12, 18, 24, or 48.",
-                  "Esa cantidad no coincide con nuestros tamaños. Tenemos 6, 9, 12, 18, 24 o 48."
-                )
+                speak: sayForCall(state, "We have 6, 9, 12, 18, 24, or 48.", "Tenemos 6, 9, 12, 18, 24 o 48.")
               })
             );
             break;
@@ -1386,17 +1298,13 @@ app.post("/vapi/tools", async (req, res) => {
           state.currentItem.allowedSauces = qtyToAllowedSauces(newQuantity);
           state.currentItem.dipsIncluded = state.currentItem.allowedSauces;
 
-          if (state.currentItem.sauces.length > state.currentItem.allowedSauces) {
-            state.currentItem.sauces = state.currentItem.sauces.slice(0, state.currentItem.allowedSauces);
-          }
-
           results.push(
             toolResult(name, toolCallId, {
               ok: true,
               speak: sayForCall(
                 state,
-                `Got you. What sauces do you want? You can do up to ${state.currentItem.allowedSauces}.`,
-                `Muy bien. ¿Qué sabores quieres? Puedes escoger hasta ${state.currentItem.allowedSauces} salsas.`
+                `Perfect. What sauce do you want? You can do up to ${state.currentItem.allowedSauces}.`,
+                `Perfecto. ¿Qué salsa quieres? Puedes escoger hasta ${state.currentItem.allowedSauces}.`
               )
             })
           );
@@ -1405,12 +1313,7 @@ app.post("/vapi/tools", async (req, res) => {
 
         case "set_sauces": {
           if (!state.currentItem) {
-            results.push(
-              toolResult(name, toolCallId, {
-                ok: false,
-                speak: sayForCall(state, "Let’s lock in the size first.", "Primero hay que confirmar cuántas van a ser.")
-              })
-            );
+            results.push(toolResult(name, toolCallId, { ok: false, speak: sayForCall(state, "Let’s lock in the size first.", "Primero confirmamos cuántas van.") }));
             break;
           }
 
@@ -1421,17 +1324,23 @@ app.post("/vapi/tools", async (req, res) => {
             .slice(0, state.currentItem.allowedSauces);
 
           if (!sauces.length) {
-            results.push(
-              toolResult(name, toolCallId, {
-                ok: false,
-                speak: sayForCall(state, "I missed the sauce. What sauce do you want?", "No alcancé la salsa. ¿Qué sabor quieres?")
-              })
-            );
+            results.push(toolResult(name, toolCallId, { ok: false, speak: sayForCall(state, "What sauce do you want?", "¿Qué salsa quieres?") }));
             break;
           }
 
           state.currentItem.sauces = sauces;
           state.flags.saucesConfirmed = true;
+
+          if ([6, 9].includes(state.currentItem.quantity) && !state.flags.upsellOffered) {
+            state.flags.upsellOffered = true;
+            results.push(
+              toolResult(name, toolCallId, {
+                ok: true,
+                speak: sayForCall(state, "You can make that a combo with a side and drink. Want to do that?", "Eso lo puedes hacer combo con side y drink. ¿Lo quieres así?")
+              })
+            );
+            break;
+          }
 
           results.push(
             toolResult(name, toolCallId, {
@@ -1448,12 +1357,7 @@ app.post("/vapi/tools", async (req, res) => {
 
         case "add_extra_dips": {
           if (!state.currentItem) {
-            results.push(
-              toolResult(name, toolCallId, {
-                ok: false,
-                speak: sayForCall(state, "Let’s finish the wings first.", "Primero terminemos las alitas.")
-              })
-            );
+            results.push(toolResult(name, toolCallId, { ok: false, speak: sayForCall(state, "Let’s finish the item first.", "Primero terminamos el item.") }));
             break;
           }
 
@@ -1462,16 +1366,11 @@ app.post("/vapi/tools", async (req, res) => {
             : [];
 
           state.currentItem.extraDips = extraDips;
-          state.flags.dipsOffered = true;
-
-          const upsellLine = state.flags.upsellOffered
-            ? sayForCall(state, "Anything else?", "¿Algo más?")
-            : sayForCall(state, "Want to add fries, mac bites, corn ribs, mozzarella sticks, onion rings, or Flyin’ corn?", "¿Quieres agregar papas, mac bites, corn ribs, mozzarella sticks, onion rings o Flyin’ corn?");
 
           results.push(
             toolResult(name, toolCallId, {
               ok: true,
-              speak: sayForCall(state, `Got you. ${upsellLine}`, `Perfecto. ${upsellLine}`)
+              speak: sayForCall(state, "Want to add any sides or extra ranch before the name?", "¿Quieres agregar algún side o ranch extra antes del nombre?")
             })
           );
           break;
@@ -1479,12 +1378,7 @@ app.post("/vapi/tools", async (req, res) => {
 
         case "add_side": {
           if (!state.currentItem) {
-            results.push(
-              toolResult(name, toolCallId, {
-                ok: false,
-                speak: sayForCall(state, "Let’s get the order started first.", "Primero vamos con la orden.")
-              })
-            );
+            results.push(toolResult(name, toolCallId, { ok: false, speak: sayForCall(state, "Let’s get the item started first.", "Primero vamos con el item.") }));
             break;
           }
 
@@ -1493,8 +1387,6 @@ app.post("/vapi/tools", async (req, res) => {
             : null;
 
           state.currentItem.side = normalizedSide;
-          state.flags.upsellOffered = true;
-
           results.push(
             toolResult(name, toolCallId, {
               ok: true,
@@ -1508,12 +1400,7 @@ app.post("/vapi/tools", async (req, res) => {
           state.customerName = parameters.customerName || null;
 
           if (!state.customerName) {
-            results.push(
-              toolResult(name, toolCallId, {
-                ok: false,
-                speak: sayForCall(state, "I missed the name. What name should I put on the order?", "No alcancé el nombre. ¿A nombre de quién pongo la orden?")
-              })
-            );
+            results.push(toolResult(name, toolCallId, { ok: false, speak: sayForCall(state, "What name should I put on the order?", "¿A nombre de quién pongo la orden?") }));
             break;
           }
 
@@ -1529,8 +1416,8 @@ app.post("/vapi/tools", async (req, res) => {
               ok: true,
               speak: sayForCall(
                 state,
-                `Alright, I got you under ${state.customerName} with ${itemSummary}. Everything look right?`,
-                `Muy bien, quedó a nombre de ${state.customerName} con ${itemSummary}. ¿Todo está bien?`
+                `Perfect. I have ${itemSummary}, under ${state.customerName}. Everything look right?`,
+                `Perfecto. Tengo ${itemSummary}, a nombre de ${state.customerName}. ¿Todo está bien?`
               )
             })
           );
@@ -1606,277 +1493,218 @@ app.post("/speech", (req, res) => {
 
   if (!speech) {
     if (session.stage === "name") {
-      return reprompt(session, res, sayByLanguage(session, "Sorry, I missed the name. What name should I put it under?", "Perdón, no alcancé el nombre. ¿A nombre de quién?"));
+      return reprompt(session, res, sayByLanguage(session, "Sorry, I missed the name. What name should I put on the order?", "Perdón, no alcancé el nombre. ¿A nombre de quién pongo la orden?"));
     }
-    return reprompt(session, res, sayByLanguage(session, "Sorry, I missed that. What can I get started for you?", "Perdón, no alcancé a escuchar bien. ¿Qué te preparo?"));
+    return reprompt(session, res, sayByLanguage(session, "Sorry, I missed that. What can I get started for you?", "Perdón, no alcancé bien. ¿Qué te preparo?"));
   }
 
   const interrupt = handleInterruptions(session, speech, res);
   if (interrupt) return interrupt;
 
+  if (session.languageLocked) {
+    if (session.languageMode === "es" && wantsEnglish(speech)) {
+      session.languageMode = "en";
+      return sayAndStore(session, res, "Of course. We can continue in English.");
+    }
+    if (session.languageMode === "en" && wantsSpanish(speech)) {
+      session.languageMode = "es";
+      return sayAndStore(session, res, "Claro. Seguimos en español.");
+    }
+  }
+
   detectRemovalsIntoOrder(session.order, speech);
 
-  if (session.order.pendingLemonPepperConfirmation) {
-    if (isYes(speech)) {
-      session.order.pendingLemonPepperConfirmation = false;
-      const next = nextPromptForMissing(session, session.order);
-      if (next) return sayAndStore(session, res, next);
-    }
-
-    if (isNo(speech) || wantsChangeSauce(speech)) {
-      session.order.pendingLemonPepperConfirmation = false;
-      session.order.sauces = session.order.sauces.filter((s) => s !== "lime pepper");
-      session.stage = "sauce";
-      return sayAndStore(session, res, sayByLanguage(session, "Got you. What sauce instead?", "Claro. ¿Qué salsa en lugar de esa?"));
-    }
-
+  if (session.order.sauces.includes("lime pepper") && /\b(lemon pepper|lemon)\b/.test(speech)) {
     return sayAndStore(session, res, lemonPepperPrompt(session));
   }
 
-  if (session.order.pendingCountedSauceConfirmation) {
-    if (isYes(speech)) {
-      session.order.pendingCountedSauceConfirmation = false;
-      const next = nextPromptForMissing(session, session.order);
-      if (next) return sayAndStore(session, res, next);
-    }
-
-    if (isNo(speech)) {
-      session.order.pendingCountedSauceConfirmation = false;
-      session.order.countedSauceParts = [];
-      session.order.sauces = [];
-      session.stage = "sauce";
-      return sayAndStore(session, res, sayByLanguage(session, "No problem. What sauce do you want?", "Claro. ¿Qué salsa quieres?"));
-    }
-
-    return sayAndStore(session, res, countedSauceConfirmationPrompt(session, session.order));
+  if (session.stage === "language") {
+    session.stage = "order";
   }
 
-  if (session.order.pendingMixedSauceCharge) {
-    if (isYes(speech)) {
-      session.order.pendingMixedSauceCharge = false;
-      const next = nextPromptForMissing(session, session.order);
-      if (next) return sayAndStore(session, res, next);
-    }
-
-    if (isNo(speech)) {
-      session.order.pendingMixedSauceCharge = false;
-      session.order.sauces = [];
-      session.stage = "sauce";
-      return sayAndStore(session, res, sayByLanguage(session, "Got you. What sauce instead?", "Muy bien. Entonces, ¿qué salsa quieres?"));
-    }
-
-    return sayAndStore(session, res, mixedSauceChargePrompt(session));
-  }
-
-  if (session.order.pendingFlyinFriesClarification) {
-    if (isYes(speech)) {
-      session.order.pendingFlyinFriesClarification = false;
-      session.order.itemType = "junior flyin fries";
-      session.stage = "name";
-      return sayAndStore(session, res, sayByLanguage(session, "Perfect. What name should I put it under?", "Perfecto. ¿A nombre de quién pongo la orden?"));
-    }
-
-    if (isNo(speech)) {
-      session.order.pendingFlyinFriesClarification = false;
-      session.order.itemType = "buffalo ranch fries";
-      if (!session.order.comboSide) session.order.comboSide = "regular fries";
-      session.stage = "name";
-      return sayAndStore(session, res, sayByLanguage(session, "Got you. What name should I put it under?", "Claro. ¿A nombre de quién pongo la orden?"));
-    }
-
-    const guessed = extractItem(speech);
-    if (guessed === "junior flyin fries" || guessed === "buffalo ranch fries") {
-      session.order.pendingFlyinFriesClarification = false;
-      session.order.itemType = guessed;
-      if (guessed === "buffalo ranch fries" && !session.order.comboSide) session.order.comboSide = "regular fries";
-      session.stage = "name";
-      return sayAndStore(session, res, sayByLanguage(session, "Perfect. What name should I put it under?", "Perfecto. ¿A nombre de quién pongo la orden?"));
-    }
-
-    session.order.pendingFlyinFriesClarification = false;
-    session.order.itemType = "junior flyin fries";
-    session.stage = "name";
-    return sayAndStore(session, res, sayByLanguage(session, "Got you. I’ll put that in as Flyin’ Fries. What name should I put it under?", "Claro. Lo dejo como Flyin’ Fries. ¿A nombre de quién pongo la orden?"));
-  }
-
-  if (session.stage === "language" || session.stage === "order") {
+  if (session.stage === "order") {
     if (wantsAnotherItem(speech) && session.order.itemType) {
       return sayAndStore(session, res, oneItemAtATimeLine(session));
     }
 
     detectInitialOrder(speech, session.order);
-
-    if (
-      !session.order.flyinFriesClarifiedOnce &&
-      (/\bflyin\b/.test(speech) || /\bflying\b/.test(speech)) &&
-      !/\bboneless\b/.test(speech) &&
-      session.order.itemType !== "buffalo ranch fries"
-    ) {
-      session.order.pendingFlyinFriesClarification = true;
-      session.order.flyinFriesClarifiedOnce = true;
-      return sayAndStore(session, res, flyinFriesClarificationPrompt(session));
-    }
-
-    if (session.order.pendingLemonPepperConfirmation) {
-      return sayAndStore(session, res, lemonPepperPrompt(session));
-    }
+    maybeHandleDirectOrderUpdates(session, speech);
 
     const burgerLine = burgerIngredientLine(session, session.order);
-    if (burgerLine && !session.order.notes.includes("burger ingredients explained")) {
-      session.order.notes.push("burger ingredients explained");
+    if (burgerLine && !session.order.notes.includes("burger ingredients confirmed")) {
+      session.order.notes.push("burger ingredients confirmed");
       return sayAndStore(session, res, burgerLine);
     }
 
     const missing = missingField(session.order);
     if (missing) {
-      session.stage = missing === "sauce" ? "sauce" : "order";
+      session.stage = missing;
       return sayAndStore(session, res, nextPromptForMissing(session, session.order));
     }
 
-    if (!session.upsellOffered && upsellOpportunity(session.order)) {
-      session.upsellOffered = true;
-      if (session.order.itemType === "ribs" || session.order.itemType === "half rack combo") {
-        return sayAndStore(
-          session,
-          res,
-          sayByLanguage(
-            session,
-            "Just so you know, you can make that a combo with a side and drink. Want to do that?",
-            "Nomás para avisarte, eso lo puedes hacer combo con side y drink. ¿Lo quieres así?"
-          )
-        );
+    if (upsellOpportunity(session.order) && !session.order.comboUpsellAsked && !session.order.comboUpsellAccepted) {
+      session.order.comboUpsellAsked = true;
+      session.stage = "combo_upsell";
+      return sayAndStore(session, res, comboUpsellLine(session));
+    }
+
+    session.stage = "pre_name_upsell";
+    session.order.preNameUpsellAsked = true;
+    return sayAndStore(session, res, preNameUpsellLine(session));
+  }
+
+  if (["quantity", "size", "protein", "chickenStyle", "sauce", "dressing", "dip", "comboSide", "fishSide", "bakedPotatoDrizzle", "bakedPotatoDrink"].includes(session.stage)) {
+    maybeHandleDirectOrderUpdates(session, speech);
+
+    if (session.stage === "quantity") {
+      const qty = extractNumber(speech);
+      if (qty) session.order.quantity = qty;
+    }
+
+    if (session.stage === "size") {
+      const rack = extractRackSize(speech);
+      if (rack) session.order.size = rack;
+    }
+
+    if (session.stage === "sauce") {
+      const sauces = extractSauces(speech);
+      if (/\b(no sauce|sin salsa)\b/.test(speech)) session.order.noSauce = true;
+      if (extractOnSideRequested(speech)) session.order.sauceOnSide = true;
+      if (sauces.length) session.order.sauces = sauces;
+    }
+
+    if (session.stage === "dressing") {
+      const dressing = extractDressing(speech);
+      if (dressing) session.order.dressing = dressing;
+    }
+
+    if (session.stage === "dip") {
+      const dips = extractDips(speech);
+      if (dips.length === 1) {
+        session.order.includedDips = [];
+        fillRemainingIncludedDipsWith(session.order, dips[0]);
+      } else if (dips.length > 1) {
+        session.order.includedDips = [];
+        addSpecificIncludedDips(session.order, dips);
+      }
+    }
+
+    if (session.stage === "comboSide" || session.stage === "fishSide") {
+      const side = extractSide(speech);
+      if (side) session.order.comboSide = side;
+    }
+
+    if (session.stage === "protein") {
+      const protein = extractProtein(speech);
+      if (protein) session.order.protein = protein;
+    }
+
+    if (session.stage === "chickenStyle") {
+      const style = extractChickenStyle(speech);
+      if (style) session.order.chickenStyle = style;
+    }
+
+    if (session.stage === "bakedPotatoDrizzle") {
+      const drizzle = extractDips(speech);
+      if (drizzle.length) session.order.bakedPotatoDrizzle = drizzle[0];
+    }
+
+    if (session.stage === "bakedPotatoDrink") {
+      const drink = extractDrink(speech);
+      if (drink) session.order.drink = drink;
+    }
+
+    const missing = missingField(session.order);
+    if (missing) {
+      session.stage = missing;
+      return sayAndStore(session, res, nextPromptForMissing(session, session.order));
+    }
+
+    if (upsellOpportunity(session.order) && !session.order.comboUpsellAsked && !session.order.comboUpsellAccepted) {
+      session.order.comboUpsellAsked = true;
+      session.stage = "combo_upsell";
+      return sayAndStore(session, res, comboUpsellLine(session));
+    }
+
+    session.stage = "pre_name_upsell";
+    session.order.preNameUpsellAsked = true;
+    return sayAndStore(session, res, preNameUpsellLine(session));
+  }
+
+  if (session.stage === "combo_upsell") {
+    if (isYes(speech)) {
+      session.order.comboUpsellAccepted = true;
+
+      if (session.order.itemType === "wings") session.order.itemType = "8 wings combo";
+      else if (session.order.itemType === "boneless") session.order.itemType = "8 boneless combo";
+      else if (session.order.itemType === "ribs" && session.order.size === "half rack") session.order.itemType = "half rack combo";
+
+      session.stage = missingField(session.order) || "pre_name_upsell";
+      if (missingField(session.order)) {
+        return sayAndStore(session, res, nextPromptForMissing(session, session.order));
+      }
+      return sayAndStore(session, res, preNameUpsellLine(session));
+    }
+
+    if (isNo(speech)) {
+      session.stage = "pre_name_upsell";
+      session.order.preNameUpsellAsked = true;
+      return sayAndStore(session, res, preNameUpsellLine(session));
+    }
+
+    return sayAndStore(session, res, comboUpsellLine(session));
+  }
+
+  if (session.stage === "pre_name_upsell") {
+    if (wantsSideUpsell(speech)) {
+      const side = extractSide(speech);
+      const dips = extractDips(speech);
+
+      if (side) {
+        session.order.notes.push(`Add side: ${side}`);
+      }
+      if (dips.length) {
+        session.order.extraDips.push(...dips);
       }
 
+      session.stage = "name";
+      return sayAndStore(session, res, sayByLanguage(session, "Perfect. What name should I put on the order?", "Perfecto. ¿A nombre de quién pongo la orden?"));
+    }
+
+    if (isNo(speech)) {
+      session.stage = "name";
+      return sayAndStore(session, res, sayByLanguage(session, "Perfect. What name should I put on the order?", "Perfecto. ¿A nombre de quién pongo la orden?"));
+    }
+
+    if (isYes(speech)) {
       return sayAndStore(
         session,
         res,
         sayByLanguage(
           session,
-          "Just so you know, you can make that a combo with a side and drink. Want to do that?",
-          "Nomás para avisarte, eso lo puedes hacer combo con side y drink. ¿Lo quieres así?"
+          "What would you like to add? You can do sides or extra ranch.",
+          "¿Qué te agrego? Puede ser algún side o ranch extra."
         )
       );
     }
 
-    session.stage = needsDip(session.order) ? "included_dip" : "next_or_name";
-
-    if (session.stage === "included_dip") {
-      return sayAndStore(session, res, nextPromptForMissing(session, session.order));
-    }
-
-    finalizeCurrentItem(session);
-
-    if (session.orderName) {
-      session.stage = "add_more";
-      return sayAndStore(session, res, askNextItemLine(session));
-    }
-
-    session.stage = "name";
-    return sayAndStore(session, res, sayByLanguage(session, "What name should I put on the order?", "¿A nombre de quién pongo la orden?"));
-  }
-
-  if (session.stage === "sauce") {
-    if (extractOnSideRequested(speech)) session.order.sauceOnSide = true;
-    if (/\b(no sauce|sin salsa)\b/.test(speech)) session.order.noSauce = true;
-
-    const sauces = extractSauces(speech);
-
-    if (!sauces.length && !session.order.noSauce) {
-      return sayAndStore(session, res, sayByLanguage(session, "Sorry, what sauce did you want?", "Perdón, ¿qué salsa quieres?"));
-    }
-
-    if (sauces.length) session.order.sauces = sauces;
-
-    if (mentionsLemonPepper(speech) && session.order.sauces.includes("lime pepper")) {
-      session.order.pendingLemonPepperConfirmation = true;
-      return sayAndStore(session, res, lemonPepperPrompt(session));
-    }
-
-    const next = nextPromptForMissing(session, session.order);
-    if (next) {
-      session.stage = missingField(session.order) === "dip" ? "included_dip" : "order";
-      return sayAndStore(session, res, next);
-    }
-
-    if (!session.upsellOffered && upsellOpportunity(session.order)) {
-      session.upsellOffered = true;
-      return sayAndStore(
-        session,
-        res,
-        sayByLanguage(
-          session,
-          "Just so you know, you can make that a combo with a side and drink. Want to do that?",
-          "Nomás para avisarte, eso lo puedes hacer combo con side y drink. ¿Lo quieres así?"
-        )
-      );
-    }
-
-    finalizeCurrentItem(session);
-
-    if (session.orderName) {
-      session.stage = "add_more";
-      return sayAndStore(session, res, askNextItemLine(session));
-    }
-
-    session.stage = "name";
-    return sayAndStore(session, res, sayByLanguage(session, "What name should I put on the order?", "¿A nombre de quién pongo la orden?"));
-  }
-
-  if (session.stage === "included_dip") {
+    const side = extractSide(speech);
     const dips = extractDips(speech);
-    const max = dipSlotsAllowed(session.completedItems.length ? session.completedItems[session.completedItems.length - 1] : session.order);
-
-    if (!dips.length) {
-      return sayAndStore(session, res, nextPromptForMissing(session, session.order));
-    }
-
-    session.order.includedDips = [];
-
-    if (wantsAllSameDip(speech) || dips.length === 1) {
-      fillRemainingIncludedDipsWith(session.order, dips[0]);
-    } else {
-      addSpecificIncludedDips(session.order, dips);
-      if (session.order.includedDips.length < max) {
-        return sayAndStore(
-          session,
-          res,
-          sayByLanguage(
-            session,
-            `I still need ${max - session.order.includedDips.length} more dip. Which one?`,
-            `Todavía me falta ${max - session.order.includedDips.length} dip. ¿Cuál quieres?`
-          )
-        );
-      }
-    }
-
-    if (!session.upsellOffered && upsellOpportunity(session.order)) {
-      session.upsellOffered = true;
-      return sayAndStore(
-        session,
-        res,
-        sayByLanguage(
-          session,
-          "Just so you know, you can make that a combo with a side and drink. Want to do that?",
-          "Nomás para avisarte, eso lo puedes hacer combo con side y drink. ¿Lo quieres así?"
-        )
-      );
-    }
-
-    finalizeCurrentItem(session);
-
-    if (session.orderName) {
-      session.stage = "add_more";
-      return sayAndStore(session, res, askNextItemLine(session));
+    if (side || dips.length) {
+      if (side) session.order.notes.push(`Add side: ${side}`);
+      if (dips.length) session.order.extraDips.push(...dips);
+      session.stage = "name";
+      return sayAndStore(session, res, sayByLanguage(session, "Perfect. What name should I put on the order?", "Perfecto. ¿A nombre de quién pongo la orden?"));
     }
 
     session.stage = "name";
-    return sayAndStore(session, res, sayByLanguage(session, "What name should I put on the order?", "¿A nombre de quién pongo la orden?"));
+    return sayAndStore(session, res, sayByLanguage(session, "Perfect. What name should I put on the order?", "Perfecto. ¿A nombre de quién pongo la orden?"));
   }
 
   if (session.stage === "name") {
     const name = extractName(speech);
     if (!name) {
-      return sayAndStore(session, res, sayByLanguage(session, "Sorry, I missed the name. What name should I put on the order?", "Perdón, no alcancé el nombre. ¿A nombre de quién pongo la orden?"));
+      return sayAndStore(session, res, sayByLanguage(session, "Sorry, what name should I put on the order?", "Perdón, ¿a nombre de quién pongo la orden?"));
     }
 
     session.orderName = name;
@@ -1900,50 +1728,44 @@ app.post("/speech", (req, res) => {
       return sayAndStore(session, res, summary);
     }
 
-    if (isYes(speech) || extractItem(speech) || extractWingStyle(speech)) {
+    if (isYes(speech) || extractItem(speech) || extractWingStyle(speech) || extractRackSize(speech)) {
       session.stage = "order";
       session.order = blankOrder();
       detectInitialOrder(speech, session.order);
-
-      if (!session.order.itemType) {
-        return sayAndStore(session, res, sayByLanguage(session, "What would you like to add next?", "¿Qué más te agrego?"));
-      }
+      maybeHandleDirectOrderUpdates(session, speech);
 
       const burgerLine = burgerIngredientLine(session, session.order);
-      if (burgerLine && !session.order.notes.includes("burger ingredients explained")) {
-        session.order.notes.push("burger ingredients explained");
+      if (burgerLine && !session.order.notes.includes("burger ingredients confirmed")) {
+        session.order.notes.push("burger ingredients confirmed");
         return sayAndStore(session, res, burgerLine);
       }
 
       const missing = missingField(session.order);
       if (missing) {
+        session.stage = missing;
         return sayAndStore(session, res, nextPromptForMissing(session, session.order));
       }
 
-      if (needsDip(session.order)) {
-        session.stage = "included_dip";
-        return sayAndStore(session, res, nextPromptForMissing(session, session.order));
+      if (upsellOpportunity(session.order) && !session.order.comboUpsellAsked && !session.order.comboUpsellAccepted) {
+        session.order.comboUpsellAsked = true;
+        session.stage = "combo_upsell";
+        return sayAndStore(session, res, comboUpsellLine(session));
       }
 
-      finalizeCurrentItem(session);
-      session.stage = "add_more";
-      return sayAndStore(session, res, askNextItemLine(session));
+      session.stage = "pre_name_upsell";
+      session.order.preNameUpsellAsked = true;
+      return sayAndStore(session, res, preNameUpsellLine(session));
     }
 
-    return sayAndStore(session, res, sayByLanguage(session, "Anything else to add?", "¿Algo más para agregar?"));
+    return sayAndStore(session, res, askNextItemLine(session));
   }
 
   if (session.stage === "confirm") {
-    if (isYes(speech) || isNo(speech)) {
-      return sayAndStore(
-        session,
-        res,
-        sayByLanguage(session, "Perfect, we’ll have that ready for pickup. See you soon.", "Perfecto, tendremos tu orden lista para recoger. Gracias."),
-        true
-      );
+    if (isYes(speech)) {
+      return sayAndStore(session, res, sayByLanguage(session, "Perfect, we’ll have that ready for pickup. See you soon.", "Perfecto, tendremos tu orden lista para recoger. Gracias."), true);
     }
 
-    if (wantsChangeSauce(speech) || extractItem(speech) || extractWingStyle(speech) || extractRemovals(speech).length) {
+    if (isNo(speech) || wantsChangeSauce(speech) || extractItem(speech) || extractWingStyle(speech) || extractRemovals(speech).length) {
       session.stage = "order";
       session.order = blankOrder();
       return sayAndStore(session, res, sayByLanguage(session, "No problem. Tell me what you want to change.", "Claro. Dime qué quieres cambiar."));
@@ -1957,5 +1779,5 @@ app.post("/speech", (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log("Jeffrey server running on port", PORT);
+  console.log(`Jeffrey backend listening on port ${PORT}`);
 });
