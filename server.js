@@ -42,7 +42,9 @@ function detectLanguage(text = "") {
     "papas de camote",
     "hamburguesa",
     "pollo",
-    "aderezo"
+    "aderezo",
+    "queso",
+    "cebolla"
   ];
 
   const englishSignals = [
@@ -58,7 +60,9 @@ function detectLanguage(text = "") {
     "half rack",
     "sweet potato fries",
     "burger",
-    "sandwich"
+    "sandwich",
+    "sauce",
+    "dip"
   ];
 
   let es = 0;
@@ -80,6 +84,15 @@ function t(state, en, es) {
   return state.language === "es" ? es : en;
 }
 
+function safeSpeak(state, maybeText) {
+  if (maybeText && String(maybeText).trim()) return maybeText;
+  return t(
+    state,
+    "Sorry, I didn’t catch that. Can you repeat that for me?",
+    "Perdón, no te entendí bien. ¿Me lo repites?"
+  );
+}
+
 function toolResult(name, toolCallId, result) {
   return {
     name,
@@ -95,7 +108,7 @@ function buildPayload(state, speak, ok = true, extra = {}) {
     customerName: state.customerName,
     currentItem: state.currentItem,
     orderSummary: fullOrderSummary(state),
-    speak,
+    speak: safeSpeak(state, speak),
     ...extra
   };
 }
@@ -140,7 +153,7 @@ const SAUCE_ALIASES = [
   { keys: ["chocolate chiltepin"], value: "chocolate chiltepin" },
   { keys: ["cinnamon roll", "canela"], value: "cinnamon roll" },
   { keys: ["citrus chipotle", "chipotle citrico", "chipotle cítrico"], value: "citrus chipotle" },
-  { keys: ["garlic parmesan", "garlic parm", "parm", "parmesan", "ajo parmesano"], value: "garlic parmesan" },
+  { keys: ["garlic parmesan", "garlic parm", "parm", "parmesan", "garlic parmesano", "garlic parmesan sauce", "ajo parmesano"], value: "garlic parmesan" },
   { keys: ["green chile", "green chili", "chile verde"], value: "green chile" },
   { keys: ["hot", "buffalo hot", "picante", "picosa"], value: "hot" },
   { keys: ["lime pepper", "laim pepper", "laim peper", "limon pepper", "limón pepper", "limon pimienta", "limón pimienta"], value: "lime pepper" },
@@ -211,7 +224,19 @@ const ITEM_ALIASES = [
 
   { keys: ["flyin baked potato combo", "baked potato combo", "loaded baked potato combo"], value: "baked potato combo" },
 
-  { keys: ["flyin fries", "flyin’ fries", "flying fries", "flain fries", "flain frais", "junior flyin fries"], value: "flyin fries" },
+  {
+    keys: [
+      "flyin fries",
+      "flyin’ fries",
+      "flying fries",
+      "flain fries",
+      "flain frais",
+      "flying fries",
+      "frailin fries",
+      "junior flyin fries"
+    ],
+    value: "flyin fries"
+  },
   { keys: ["pork belly fries"], value: "pork belly fries" },
   { keys: ["chicken parmesan fries", "chicken parm fries"], value: "chicken parmesan fries" },
   { keys: ["buffalo ranch fries"], value: "buffalo ranch fries" },
@@ -292,10 +317,6 @@ function parseSauce(value) {
 
   const mapped = findAlias(value, SAUCE_ALIASES);
   return { correctionRequired: false, correctedValue: mapped || null };
-}
-
-function mapListUnique(values, aliasList) {
-  return unique((values || []).map((v) => findAlias(v, aliasList)).filter(Boolean));
 }
 
 function mapListKeepRepeats(values, aliasList) {
@@ -498,7 +519,7 @@ function loadedFriesPrompt(state, itemType) {
     return t(
       state,
       "That comes with fries, boneless, ranch, chipotle ranch, and buffalo sauce on top. Everything okay?",
-      "Eso lleva fries, boneless, ranch, chipotle ranch y buffalo arriba. ¿Está bien así?"
+      "Eso lleva Flain frais, boneless, ranch, chipotle ranch y buffalo arriba. ¿Está bien así?"
     );
   }
 
@@ -506,7 +527,7 @@ function loadedFriesPrompt(state, itemType) {
     return t(
       state,
       "That comes with fries, pork belly, ranch, green chile on top, onion, and cilantro. Everything okay?",
-      "Eso lleva fries, pork belly, ranch, green chile arriba, cebolla y cilantro. ¿Está bien así?"
+      "Eso lleva frais, pork belly, ranch, green chile arriba, cebolla y cilantro. ¿Está bien así?"
     );
   }
 
@@ -514,7 +535,7 @@ function loadedFriesPrompt(state, itemType) {
     return t(
       state,
       "That comes with fries, fried chicken breast, ranch, marinara, and parmesan on top. Everything okay?",
-      "Eso lleva fries, pechuga frita, ranch, marinara y parmesan arriba. ¿Está bien así?"
+      "Eso lleva frais, pechuga frita, ranch, marinara y parmesan arriba. ¿Está bien así?"
     );
   }
 
@@ -631,7 +652,7 @@ function nextQuestion(state, item) {
   }
 
   if ((item.itemType === "chicken sandwich" || item.itemType === "chicken sandwich combo") && !item.chickenStyle) {
-    return t(state, "Would you like grilled or fried chicken?", "¿Lo quieres de pollo a la plancha o frito?");
+    return t(state, "Would you like grilled or fried chicken?", "¿Lo quieres a la plancha o frito?");
   }
 
   if ((item.itemType === "flyin burger" || item.itemType === "flyin burger combo") && !item.chickenStyle) {
@@ -639,7 +660,7 @@ function nextQuestion(state, item) {
   }
 
   if (item.itemType === "flyin salad" && !item.chickenStyle) {
-    return t(state, "Would you like grilled or fried chicken?", "¿Lo quieres de pollo a la plancha o frito?");
+    return t(state, "Would you like grilled or fried chicken?", "¿Lo quieres a la plancha o frito?");
   }
 
   if (item.itemType === "baked potato combo" && !item.protein) {
@@ -651,7 +672,7 @@ function nextQuestion(state, item) {
   }
 
   if (item.itemType === "baked potato combo" && item.protein === "chicken" && !item.chickenStyle) {
-    return t(state, "Would you like grilled or fried chicken?", "¿Lo quieres de pollo a la plancha o frito?");
+    return t(state, "Would you like grilled or fried chicken?", "¿Lo quieres a la plancha o frito?");
   }
 
   if (sauceSlotsAllowed(item) > 0 && !item.noSauce && item.sauces.length === 0) {
@@ -717,11 +738,7 @@ function nextQuestion(state, item) {
   }
 
   if (item.itemType === "baked potato combo" && !item.drink) {
-    return t(
-      state,
-      "Soft drink or bottled water?",
-      "¿Refresco o agua embotellada?"
-    );
+    return t(state, "Soft drink or bottled water?", "¿Refresco o agua embotellada?");
   }
 
   return t(state, "Perfect. What would you like to add next?", "Perfecto. ¿Qué más te agrego?");
@@ -757,9 +774,7 @@ function itemComplete(item) {
     return Boolean(item.sauces.length >= 2 && item.includedDips.length >= 1 && item.side);
   }
 
-  if (item.itemType === "fish combo") {
-    return Boolean(item.side);
-  }
+  if (item.itemType === "fish combo") return Boolean(item.side);
 
   if (item.itemType === "classic burger" || item.itemType === "buffalo burger") {
     return Boolean(item.ingredientConfirmed);
@@ -792,25 +807,14 @@ function itemComplete(item) {
     return Boolean(item.sauces.length >= 1 && item.includedDips.length >= 1);
   }
 
-  if (item.itemType === "kids cheeseburger") {
-    return Boolean(item.ingredientConfirmed);
-  }
-
-  if (item.itemType === "sampler platter") {
-    return Boolean(item.sauces.length >= 1);
-  }
-
+  if (item.itemType === "kids cheeseburger") return Boolean(item.ingredientConfirmed);
+  if (item.itemType === "sampler platter") return Boolean(item.sauces.length >= 1);
   if (isLoadedFries(item)) return Boolean(item.ingredientConfirmed);
 
   return true;
 }
 
 /* ----------------------------- display ----------------------------- */
-
-function displaySauce(sauce, lang) {
-  if (sauce === "lime pepper") return lang === "es" ? "lime pepper" : "lime pepper";
-  return sauce;
-}
 
 function displaySide(side, lang) {
   if (lang === "es") {
@@ -922,7 +926,7 @@ function summaryForItem(item, lang = "en") {
     if (item.noSauce) {
       parts.push(lang === "es" ? "sin salsa" : "no sauce");
     } else if (item.sauces.length) {
-      parts.push(item.sauces.map((s) => displaySauce(s, lang)).join(lang === "es" ? " y " : " and "));
+      parts.push(item.sauces.join(lang === "es" ? " y " : " and "));
       if (item.sauceOnSide) parts.push(lang === "es" ? "aparte" : "on the side");
     }
   }
@@ -982,15 +986,11 @@ function fullOrderSummary(state) {
 /* ----------------------------- route helpers ----------------------------- */
 
 function setBurgerConfirmationIfNeeded(item) {
-  if (isBurgerLike(item)) {
-    item.pendingIngredientConfirmation = "burger";
-  }
+  if (isBurgerLike(item)) item.pendingIngredientConfirmation = "burger";
 }
 
 function setLoadedConfirmationIfNeeded(item) {
-  if (isLoadedFries(item)) {
-    item.pendingIngredientConfirmation = "loaded";
-  }
+  if (isLoadedFries(item)) item.pendingIngredientConfirmation = "loaded";
 }
 
 function addBuffaloBurgerNotes(item) {
@@ -1053,7 +1053,7 @@ app.post("/vapi/tools", async (req, res) => {
           if (!itemType) {
             results.push(toolResult(name, toolCallId, buildPayload(
               state,
-              t(state, "What item would you like?", "¿Qué item quieres?"),
+              t(state, "Sorry, I didn’t catch the item. What would you like?", "Perdón, no entendí el item. ¿Qué quieres ordenar?"),
               false
             )));
             break;
@@ -1170,6 +1170,9 @@ app.post("/vapi/tools", async (req, res) => {
           if (comboUpsellAvailable(state.currentItem)) {
             state.currentItem.pendingComboUpsell = true;
             state.currentItem.pendingComboTarget = getComboTarget(state.currentItem.itemType);
+          } else {
+            state.currentItem.pendingComboUpsell = false;
+            state.currentItem.pendingComboTarget = null;
           }
 
           results.push(toolResult(name, toolCallId, buildPayload(
@@ -1206,6 +1209,9 @@ app.post("/vapi/tools", async (req, res) => {
           if (comboUpsellAvailable(state.currentItem)) {
             state.currentItem.pendingComboUpsell = true;
             state.currentItem.pendingComboTarget = getComboTarget(state.currentItem.itemType);
+          } else {
+            state.currentItem.pendingComboUpsell = false;
+            state.currentItem.pendingComboTarget = null;
           }
 
           results.push(toolResult(name, toolCallId, buildPayload(
@@ -1475,7 +1481,6 @@ app.post("/vapi/tools", async (req, res) => {
           }
 
           state.currentItem.chickenStyle = style;
-
           if (isBurgerLike(state.currentItem)) setBurgerConfirmationIfNeeded(state.currentItem);
 
           results.push(toolResult(name, toolCallId, buildPayload(
@@ -1631,6 +1636,19 @@ app.post("/vapi/tools", async (req, res) => {
           break;
         }
 
+        case "recover_unclear_input": {
+          results.push(toolResult(name, toolCallId, buildPayload(
+            state,
+            t(
+              state,
+              "Sorry, I didn’t catch that. Can you repeat that for me?",
+              "Perdón, no te entendí bien. ¿Me lo repites?"
+            ),
+            false
+          )));
+          break;
+        }
+
         case "finalize_current_item": {
           if (!itemComplete(state.currentItem)) {
             results.push(toolResult(name, toolCallId, buildPayload(
@@ -1721,7 +1739,11 @@ app.post("/vapi/tools", async (req, res) => {
         default: {
           results.push(toolResult(name, toolCallId, buildPayload(
             state,
-            t(state, "That backend tool is not configured yet.", "Esa herramienta del backend todavía no está configurada."),
+            t(
+              state,
+              "Sorry, I didn’t catch that. Can you repeat that for me?",
+              "Perdón, no te entendí bien. ¿Me lo repites?"
+            ),
             false
           )));
         }
@@ -1731,7 +1753,18 @@ app.post("/vapi/tools", async (req, res) => {
     return res.status(200).json({ results });
   } catch (error) {
     console.error("Error in /vapi/tools:", error);
-    return res.status(200).json({ results: [] });
+    return res.status(200).json({
+      results: [
+        {
+          name: "error_fallback",
+          toolCallId: "server-error",
+          result: JSON.stringify({
+            ok: false,
+            speak: "Sorry, I didn’t catch that. Can you repeat that for me?"
+          })
+        }
+      ]
+    });
   }
 });
 
