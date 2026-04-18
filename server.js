@@ -80,79 +80,54 @@ function t(state, en, es) {
   return state.language === "es" ? es : en;
 }
 
-function findAlias(text, aliasList) {
-  const norm = normalize(text);
-  for (const entry of aliasList) {
-    for (const key of entry.keys) {
-      const nk = normalize(key);
-      if (norm === nk || norm.includes(nk)) return entry.value;
+function toolResult(name, toolCallId, result) {
+  return {
+    name,
+    toolCallId,
+    result: JSON.stringify(result)
+  };
+}
+
+function buildPayload(state, speak, ok = true, extra = {}) {
+  return {
+    ok,
+    language: state.language,
+    customerName: state.customerName,
+    currentItem: state.currentItem,
+    orderSummary: fullOrderSummary(state),
+    speak,
+    ...extra
+  };
+}
+
+function getLatestCustomerText(message) {
+  const msgs = message?.artifact?.messages;
+  if (Array.isArray(msgs)) {
+    for (let i = msgs.length - 1; i >= 0; i -= 1) {
+      const msg = msgs[i];
+      if (msg?.role === "user" && typeof msg?.message === "string") {
+        return msg.message;
+      }
     }
   }
-  return null;
+  if (typeof message?.customer?.message === "string") return message.customer.message;
+  if (typeof message?.transcript === "string") return message.transcript;
+  return "";
 }
 
-function mapListUnique(values, aliasList) {
-  return unique((values || []).map((v) => findAlias(v, aliasList)).filter(Boolean));
-}
-
-function mapListKeepRepeats(values, aliasList) {
-  return (values || []).map((v) => findAlias(v, aliasList)).filter(Boolean);
-}
-
-function parseMods(values) {
-  return unique((values || []).map((v) => findAlias(v, MOD_ALIASES)).filter(Boolean));
-}
-
-function countList(list) {
-  const counts = {};
-  for (const item of list || []) {
-    counts[item] = (counts[item] || 0) + 1;
+function maybeLockLanguage(state, latestText = "", explicitLanguage = null) {
+  if (explicitLanguage === "en" || explicitLanguage === "es") {
+    state.language = explicitLanguage;
+    state.languageLocked = true;
+    return;
   }
-  return Object.entries(counts)
-    .map(([name, qty]) => `${qty} ${name}`)
-    .join(", ");
-}
 
-function displaySauce(sauce, lang) {
-  if (sauce === "lime pepper") {
-    return lang === "es" ? "laim peper" : "laim pepper";
-  }
-  return sauce;
-}
+  if (state.languageLocked) return;
 
-function displaySide(side, lang) {
-  if (lang === "es") {
-    const map = {
-      "regular fries": "papas",
-      "sweet potato fries": "papas de camote",
-      "potato salad": "ensalada de papa",
-      "buffalo ranch fries": "buffalo ranch fries",
-      "tostones": "tostones",
-      "yuca fries": "papas de yuca"
-    };
-    return map[side] || side;
+  const detected = detectLanguage(latestText);
+  if (detected !== "unknown") {
+    state.language = detected;
   }
-  return side;
-}
-
-function displayProtein(protein, lang) {
-  if (lang === "es") {
-    const map = {
-      "chicken": "pollo",
-      "steak": "carne asada",
-      "pork belly": "pork belly",
-      "no protein": "sin proteína"
-    };
-    return map[protein] || protein;
-  }
-  return protein;
-}
-
-function displayChickenStyle(style, lang) {
-  if (lang === "es") {
-    return style === "grilled" ? "a la plancha" : "frito";
-  }
-  return style;
 }
 
 /* ----------------------------- aliases ----------------------------- */
@@ -168,7 +143,7 @@ const SAUCE_ALIASES = [
   { keys: ["garlic parmesan", "garlic parm", "parm", "parmesan", "ajo parmesano"], value: "garlic parmesan" },
   { keys: ["green chile", "green chili", "chile verde"], value: "green chile" },
   { keys: ["hot", "buffalo hot", "picante", "picosa"], value: "hot" },
-  { keys: ["lime pepper", "laim pepper", "laim peper", "limon pepper", "limón pepper", "limon pimienta", "limón pimienta", "lemon pepper"], value: "lime pepper" },
+  { keys: ["lime pepper", "laim pepper", "laim peper", "limon pepper", "limón pepper", "limon pimienta", "limón pimienta"], value: "lime pepper" },
   { keys: ["mild", "buffalo mild", "suave"], value: "mild" },
   { keys: ["mango habanero"], value: "mango habanero" },
   { keys: ["pizza"], value: "pizza" },
@@ -184,10 +159,10 @@ const DIP_ALIASES = [
 
 const SIDE_ALIASES = [
   { keys: ["regular fries", "fries", "french fries", "papas", "papas fritas", "frais"], value: "regular fries" },
-  { keys: ["sweet potato fries", "papas de camote", "camote fries"], value: "sweet potato fries" },
+  { keys: ["sweet potato fries", "papas de camote"], value: "sweet potato fries" },
   { keys: ["potato salad", "ensalada de papa"], value: "potato salad" },
   { keys: ["buffalo ranch fries"], value: "buffalo ranch fries" },
-  { keys: ["mac bites", "mac bite", "mac and cheese bites"], value: "mac bites" },
+  { keys: ["mac bites", "mac and cheese bites"], value: "mac bites" },
   { keys: ["corn ribs", "costillas de elote"], value: "corn ribs" },
   { keys: ["mozzarella sticks", "mozzarella"], value: "mozzarella sticks" },
   { keys: ["onion rings", "aros de cebolla"], value: "onion rings" },
@@ -195,8 +170,6 @@ const SIDE_ALIASES = [
   { keys: ["tostones"], value: "tostones" },
   { keys: ["yuca fries", "yucca fries", "yuca"], value: "yuca fries" }
 ];
-
-const DRESSING_ALIASES = [...DIP_ALIASES];
 
 const PROTEIN_ALIASES = [
   { keys: ["chicken", "pollo"], value: "chicken" },
@@ -227,14 +200,14 @@ const ITEM_ALIASES = [
   { keys: ["classic burger combo"], value: "classic burger combo" },
   { keys: ["classic burger"], value: "classic burger" },
 
+  { keys: ["buffalo burger combo"], value: "buffalo burger combo" },
+  { keys: ["buffalo burger"], value: "buffalo burger" },
+
   { keys: ["chicken sandwich combo"], value: "chicken sandwich combo" },
   { keys: ["chicken sandwich"], value: "chicken sandwich" },
 
   { keys: ["flyin burger combo", "flyin’ burger combo"], value: "flyin burger combo" },
   { keys: ["flyin burger", "flyin’ burger"], value: "flyin burger" },
-
-  { keys: ["buffalo burger combo"], value: "buffalo burger combo" },
-  { keys: ["buffalo burger"], value: "buffalo burger" },
 
   { keys: ["flyin baked potato combo", "baked potato combo", "loaded baked potato combo"], value: "baked potato combo" },
 
@@ -246,7 +219,7 @@ const ITEM_ALIASES = [
   { keys: ["house salad"], value: "house salad" },
   { keys: ["flyin salad", "flyin’ salad"], value: "flyin salad" },
 
-  { keys: ["pork belly"], value: "pork belly" },
+  { keys: ["pork belly", "6 piece pork belly", "6 pieces pork belly"], value: "pork belly" },
   { keys: ["mac bites", "mac bite"], value: "mac bites" },
   { keys: ["onion rings"], value: "onion rings" },
   { keys: ["flyin corn"], value: "flyin corn" },
@@ -265,39 +238,68 @@ const MOD_ALIASES = [
   { keys: ["no cheese", "sin queso"], value: "no cheese" },
   { keys: ["no mayo", "sin mayonesa"], value: "no mayo" },
   { keys: ["no lettuce", "sin lechuga"], value: "no lettuce" },
-  { keys: ["no pickles", "sin pickles", "sin pepinillos"], value: "no pickles" }
+  { keys: ["no pickles", "sin pickles", "sin pepinillos"], value: "no pickles" },
+  { keys: ["on the side", "aparte", "on side"], value: "on the side" }
 ];
+
+function findAlias(text, aliasList) {
+  const norm = normalize(text);
+  for (const entry of aliasList) {
+    for (const key of entry.keys) {
+      const nk = normalize(key);
+      if (norm === nk || norm.includes(nk)) return entry.value;
+    }
+  }
+  return null;
+}
 
 function parseItem(value) {
   return findAlias(value, ITEM_ALIASES);
 }
+
 function parseSide(value) {
   return findAlias(value, SIDE_ALIASES);
 }
+
 function parseProtein(value) {
   return findAlias(value, PROTEIN_ALIASES);
 }
+
 function parseChickenStyle(value) {
   return findAlias(value, CHICKEN_STYLE_ALIASES);
 }
-function parseDressing(value) {
-  return findAlias(value, DRESSING_ALIASES);
-}
+
 function parseDip(value) {
   return findAlias(value, DIP_ALIASES);
 }
+
+function parseMods(values) {
+  return unique((values || []).map((v) => findAlias(v, MOD_ALIASES)).filter(Boolean));
+}
+
 function parseSauce(value) {
   const norm = normalize(value);
+
   if (
     norm.includes("lemon pepper") ||
-    norm.includes("lemon") ||
     norm.includes("limon pepper") ||
-    norm.includes("limón pepper")
+    norm.includes("limón pepper") ||
+    norm === "lemon" ||
+    norm === "limon"
   ) {
     return { correctionRequired: true, correctedValue: "lime pepper" };
   }
+
   const mapped = findAlias(value, SAUCE_ALIASES);
   return { correctionRequired: false, correctedValue: mapped || null };
+}
+
+function mapListUnique(values, aliasList) {
+  return unique((values || []).map((v) => findAlias(v, aliasList)).filter(Boolean));
+}
+
+function mapListKeepRepeats(values, aliasList) {
+  return (values || []).map((v) => findAlias(v, aliasList)).filter(Boolean);
 }
 
 /* ----------------------------- state ----------------------------- */
@@ -315,8 +317,6 @@ function blankItem() {
 
     includedDips: [],
     extraDips: [],
-    drizzles: [],
-    toppings: [],
 
     side: null,
     dressing: null,
@@ -331,6 +331,7 @@ function blankItem() {
 
     pendingComboUpsell: false,
     pendingComboTarget: null,
+
     pendingIngredientConfirmation: null,
     ingredientConfirmed: false
   };
@@ -348,46 +349,30 @@ function blankCallState() {
 }
 
 function getCallState(callId) {
-  if (!calls.has(callId)) {
-    calls.set(callId, blankCallState());
-  }
+  if (!calls.has(callId)) calls.set(callId, blankCallState());
   return calls.get(callId);
 }
 
-function maybeLockLanguage(state, latestText = "", explicitLanguage = null) {
-  if (explicitLanguage === "en" || explicitLanguage === "es") {
-    state.language = explicitLanguage;
-    state.languageLocked = true;
-    return;
-  }
-  if (state.languageLocked) return;
-
-  const detected = detectLanguage(latestText);
-  if (detected !== "unknown") {
-    state.language = detected;
-  }
-}
-
-/* ----------------------------- menu logic helpers ----------------------------- */
+/* ----------------------------- menu logic ----------------------------- */
 
 function isWingBase(item) {
   return item.itemType === "wings" || item.itemType === "boneless";
 }
 
-function isStandaloneBurgerOrSandwich(item) {
-  return ["classic burger", "chicken sandwich", "flyin burger", "buffalo burger"].includes(item.itemType);
+function isStandaloneBurgerLike(item) {
+  return ["classic burger", "buffalo burger", "chicken sandwich", "flyin burger"].includes(item.itemType);
 }
 
 function isBurgerLike(item) {
   return [
     "classic burger",
     "classic burger combo",
+    "buffalo burger",
+    "buffalo burger combo",
     "chicken sandwich",
     "chicken sandwich combo",
     "flyin burger",
-    "flyin burger combo",
-    "buffalo burger",
-    "buffalo burger combo"
+    "flyin burger combo"
   ].includes(item.itemType);
 }
 
@@ -395,42 +380,18 @@ function isLoadedFries(item) {
   return ["flyin fries", "pork belly fries", "chicken parmesan fries"].includes(item.itemType);
 }
 
-function isStandaloneSimpleItem(item) {
+function sideChoiceItems(itemType) {
   return [
-    "mac bites",
-    "onion rings",
-    "flyin corn",
-    "corn ribs",
-    "mozzarella sticks",
-    "sampler platter",
-    "buffalo ranch fries",
-    "kids cheeseburger"
-  ].includes(item.itemType);
-}
-
-function comboSideAllowed(item, side) {
-  const standard = ["regular fries", "sweet potato fries", "potato salad"];
-
-  if (
-    [
-      "8 wings combo",
-      "8 boneless combo",
-      "half rack combo",
-      "half rack and 4 bone in combo",
-      "classic burger combo",
-      "chicken sandwich combo",
-      "flyin burger combo",
-      "buffalo burger combo"
-    ].includes(item.itemType)
-  ) {
-    return standard.includes(side);
-  }
-
-  if (item.itemType === "fish combo") {
-    return [...standard, "tostones", "yuca fries"].includes(side);
-  }
-
-  return true;
+    "8 wings combo",
+    "8 boneless combo",
+    "half rack combo",
+    "half rack and 4 bone in combo",
+    "fish combo",
+    "classic burger combo",
+    "buffalo burger combo",
+    "chicken sandwich combo",
+    "flyin burger combo"
+  ].includes(itemType);
 }
 
 function sauceSlotsAllowed(item) {
@@ -453,6 +414,7 @@ function sauceSlotsAllowed(item) {
   if (item.itemType === "kids boneless") return 1;
   if (item.itemType === "kids wings") return 1;
   if (item.itemType === "baked potato combo") return 1;
+
   if (item.itemType === "ribs") {
     if (item.size === "half rack") return 1;
     if (item.size === "full rack") return 2;
@@ -491,7 +453,7 @@ function comboUpsellAvailable(item) {
     (item.itemType === "wings" && [6, 9].includes(Number(item.quantity))) ||
     (item.itemType === "boneless" && [6, 9].includes(Number(item.quantity))) ||
     (item.itemType === "ribs" && item.size === "half rack") ||
-    isStandaloneBurgerOrSandwich(item)
+    isStandaloneBurgerLike(item)
   );
 }
 
@@ -500,132 +462,160 @@ function getComboTarget(itemType) {
   if (itemType === "boneless") return "8 boneless combo";
   if (itemType === "ribs") return "half rack combo";
   if (itemType === "classic burger") return "classic burger combo";
+  if (itemType === "buffalo burger") return "buffalo burger combo";
   if (itemType === "chicken sandwich") return "chicken sandwich combo";
   if (itemType === "flyin burger") return "flyin burger combo";
-  if (itemType === "buffalo burger") return "buffalo burger combo";
   return null;
 }
 
-function setLoadedFriesDefaults(item) {
-  if (item.itemType === "flyin fries") {
-    item.noSauce = true;
-    item.drizzles = ["ranch", "chipotle ranch", "buffalo"];
-    item.toppings = ["boneless"];
-    item.pendingIngredientConfirmation = "flyin fries";
+function comboSideAllowed(itemType, side) {
+  const standard = ["regular fries", "sweet potato fries", "potato salad"];
+
+  if (
+    [
+      "8 wings combo",
+      "8 boneless combo",
+      "half rack combo",
+      "half rack and 4 bone in combo",
+      "classic burger combo",
+      "buffalo burger combo",
+      "chicken sandwich combo",
+      "flyin burger combo"
+    ].includes(itemType)
+  ) {
+    return standard.includes(side);
   }
 
-  if (item.itemType === "pork belly fries") {
-    item.noSauce = true;
-    item.drizzles = ["ranch", "green chile"];
-    item.toppings = ["pork belly", "onion", "cilantro"];
-    item.pendingIngredientConfirmation = "pork belly fries";
+  if (itemType === "fish combo") {
+    return [...standard, "tostones", "yuca fries"].includes(side);
   }
 
-  if (item.itemType === "chicken parmesan fries") {
-    item.noSauce = true;
-    item.drizzles = ["ranch", "marinara"];
-    item.toppings = ["fried chicken breast", "parmesan"];
-    item.pendingIngredientConfirmation = "chicken parmesan fries";
-  }
+  return true;
 }
 
-function getIngredientConfirmationPrompt(state, item) {
-  if (item.itemType === "flyin fries") {
+function loadedFriesPrompt(state, itemType) {
+  if (itemType === "flyin fries") {
     return t(
       state,
-      "That comes with boneless, buffalo, ranch, and chipotle ranch on top. Everything okay?",
-      "Viene con boneless, buffalo, ranch y chipotle ranch arriba. ¿Está bien así?"
+      "That comes with fries, boneless, ranch, chipotle ranch, and buffalo sauce on top. Everything okay?",
+      "Eso lleva fries, boneless, ranch, chipotle ranch y buffalo arriba. ¿Está bien así?"
     );
   }
 
-  if (item.itemType === "pork belly fries") {
+  if (itemType === "pork belly fries") {
     return t(
       state,
-      "That comes with pork belly, ranch, green chile on top, onion, and cilantro. Everything okay?",
-      "Viene con pork belly, ranch, green chile arriba, cebolla y cilantro. ¿Está bien así?"
+      "That comes with fries, pork belly, ranch, green chile on top, onion, and cilantro. Everything okay?",
+      "Eso lleva fries, pork belly, ranch, green chile arriba, cebolla y cilantro. ¿Está bien así?"
     );
   }
 
-  if (item.itemType === "chicken parmesan fries") {
+  if (itemType === "chicken parmesan fries") {
     return t(
       state,
-      "That comes with fried chicken breast, ranch, marinara, and parmesan on top. Everything okay?",
-      "Viene con pechuga de pollo frita, ranch, marinara y parmesan arriba. ¿Está bien así?"
-    );
-  }
-
-  if (item.itemType === "classic burger" || item.itemType === "classic burger combo") {
-    return t(
-      state,
-      "That comes with cheese, mayo, lettuce, onion, tomato, and pickles. Any changes?",
-      "Trae queso, mayo, lechuga, cebolla, tomate y pickles. ¿Algún cambio?"
-    );
-  }
-
-  if (item.itemType === "chicken sandwich" || item.itemType === "chicken sandwich combo") {
-    return t(
-      state,
-      "That comes with cheese, mayo, lettuce, onion, tomato, and pickles. Any changes?",
-      "Trae queso, mayo, lechuga, cebolla, tomate y pickles. ¿Algún cambio?"
-    );
-  }
-
-  if (item.itemType === "flyin burger" || item.itemType === "flyin burger combo") {
-    return t(
-      state,
-      "That comes with cheese, mayo, chipotle ranch, lettuce, onion, tomato, and pickles. Any changes?",
-      "Trae queso, mayo, chipotle ranch, lechuga, cebolla, tomate y pickles. ¿Algún cambio?"
-    );
-  }
-
-  if (item.itemType === "buffalo burger" || item.itemType === "buffalo burger combo") {
-    return t(
-      state,
-      "That comes with cheese, buffalo sauce, ranch, lettuce, onion, tomato, and pickles. Any changes?",
-      "Trae queso, buffalo sauce, ranch, lechuga, cebolla, tomate y pickles. ¿Algún cambio?"
+      "That comes with fries, fried chicken breast, ranch, marinara, and parmesan on top. Everything okay?",
+      "Eso lleva fries, pechuga frita, ranch, marinara y parmesan arriba. ¿Está bien así?"
     );
   }
 
   return null;
+}
+
+function burgerIngredientsPrompt(state, itemType) {
+  if (itemType === "classic burger" || itemType === "classic burger combo") {
+    return t(
+      state,
+      "That comes with cheese, mayo, lettuce, onion, tomato, and pickles. Any changes?",
+      "Eso lleva queso, mayo, lechuga, cebolla, tomate y pickles. ¿Algún cambio?"
+    );
+  }
+
+  if (itemType === "buffalo burger" || itemType === "buffalo burger combo") {
+    return t(
+      state,
+      "That comes with cheese, buffalo mild sauce, ranch, lettuce, onion, tomato, and pickles. Any changes?",
+      "Eso lleva queso, buffalo mild, ranch, lechuga, cebolla, tomate y pickles. ¿Algún cambio?"
+    );
+  }
+
+  if (itemType === "chicken sandwich" || itemType === "chicken sandwich combo") {
+    return t(
+      state,
+      "That comes with cheese, mayo, lettuce, onion, tomato, and pickles. Any changes?",
+      "Eso lleva queso, mayo, lechuga, cebolla, tomate y pickles. ¿Algún cambio?"
+    );
+  }
+
+  if (itemType === "flyin burger" || itemType === "flyin burger combo") {
+    return t(
+      state,
+      "That comes with a beef patty with cheese, a chicken patty with cheese, mayo, chipotle ranch, lettuce, onion, tomato, and pickles. Any changes?",
+      "Eso lleva una carne con queso, una pechuga de pollo con queso, mayo, chipotle ranch, lechuga, cebolla, tomate y pickles. ¿Algún cambio?"
+    );
+  }
+
+  return null;
+}
+
+function setLoadedItemDefaults(item) {
+  if (item.itemType === "flyin fries") {
+    item.pendingIngredientConfirmation = "loaded_item";
+    item.notes.push("Default loaded item: fries, boneless, ranch, chipotle ranch, buffalo on top");
+  }
+
+  if (item.itemType === "pork belly fries") {
+    item.pendingIngredientConfirmation = "loaded_item";
+    item.notes.push("Default loaded item: fries, pork belly, ranch, green chile on top, onion, cilantro");
+  }
+
+  if (item.itemType === "chicken parmesan fries") {
+    item.pendingIngredientConfirmation = "loaded_item";
+    item.notes.push("Default loaded item: fries, fried chicken breast, ranch, marinara, parmesan on top");
+  }
+
+  if (item.itemType === "buffalo ranch fries") {
+    item.side = item.side || "regular fries";
+  }
 }
 
 function nextQuestion(state, item) {
   if (item.pendingSauceCorrection) {
     return t(
       state,
-      "We have that as laim pepper here. Is that okay?",
-      "La tenemos como laim peper. ¿Está bien así?"
+      "We have that as lime pepper. Is that okay?",
+      "La tenemos como lime pepper. ¿Está bien así?"
     );
   }
 
   if (item.pendingComboUpsell) {
-    if (item.itemType === "ribs" && item.size === "half rack") {
-      return t(
-        state,
-        "You can make that a half rack combo with regular fries and a drink. Want to do that?",
-        "Lo puedes hacer combo de medio rack con papas y bebida. ¿Lo quieres así?"
-      );
-    }
-
     if (item.itemType === "wings" || item.itemType === "boneless") {
       return t(
         state,
-        "You can make that an 8-piece combo with regular fries and a drink. Want to do that?",
-        "Lo puedes hacer combo de 8 piezas con papas y bebida. ¿Lo quieres así?"
+        "You can make that an 8-piece combo with fries and a drink. Want to do that?",
+        "Lo puedes hacer combo de 8 piezas con fries y bebida. ¿Lo quieres así?"
       );
     }
 
-    if (isStandaloneBurgerOrSandwich(item)) {
+    if (item.itemType === "ribs" && item.size === "half rack") {
       return t(
         state,
-        "You can make that a combo with regular fries and a drink. Want to do that?",
-        "Lo puedes hacer combo con papas y bebida. ¿Lo quieres así?"
+        "You can make that a half rack combo with fries and a drink. Want to do that?",
+        "Lo puedes hacer combo de medio rack con fries y bebida. ¿Lo quieres así?"
+      );
+    }
+
+    if (isStandaloneBurgerLike(item)) {
+      return t(
+        state,
+        "You can make that a combo with fries and a drink. Want to do that?",
+        "Lo puedes hacer combo con fries y bebida. ¿Lo quieres así?"
       );
     }
   }
 
   if (item.pendingIngredientConfirmation) {
-    return getIngredientConfirmationPrompt(state, item);
+    if (isLoadedFries(item)) return loadedFriesPrompt(state, item.itemType);
+    if (isBurgerLike(item)) return burgerIngredientsPrompt(state, item.itemType);
   }
 
   if (!item.itemType) {
@@ -641,7 +631,7 @@ function nextQuestion(state, item) {
   }
 
   if ((item.itemType === "chicken sandwich" || item.itemType === "chicken sandwich combo") && !item.chickenStyle) {
-    return t(state, "Would you like the chicken grilled or fried?", "¿Quieres el pollo a la plancha o frito?");
+    return t(state, "Would you like grilled or fried chicken?", "¿Lo quieres de pollo a la plancha o frito?");
   }
 
   if ((item.itemType === "flyin burger" || item.itemType === "flyin burger combo") && !item.chickenStyle) {
@@ -649,22 +639,31 @@ function nextQuestion(state, item) {
   }
 
   if (item.itemType === "flyin salad" && !item.chickenStyle) {
-    return t(state, "Would you like the chicken grilled or fried?", "¿Quieres el pollo a la plancha o frito?");
+    return t(state, "Would you like grilled or fried chicken?", "¿Lo quieres de pollo a la plancha o frito?");
   }
 
   if (item.itemType === "baked potato combo" && !item.protein) {
     return t(
       state,
-      "For the Flyin’ baked potato combo: chicken, steak, pork belly, or no protein?",
-      "Para el combo de Flyin’ baked potato: ¿pollo, carne asada, pork belly o sin proteína?"
+      "For the baked potato combo: chicken, steak, pork belly, or no protein?",
+      "Para el combo de baked potato: ¿pollo, carne asada, pork belly o sin proteína?"
     );
   }
 
   if (item.itemType === "baked potato combo" && item.protein === "chicken" && !item.chickenStyle) {
-    return t(state, "Would you like the chicken grilled or fried?", "¿Quieres el pollo a la plancha o frito?");
+    return t(state, "Would you like grilled or fried chicken?", "¿Lo quieres de pollo a la plancha o frito?");
   }
 
   if (sauceSlotsAllowed(item) > 0 && !item.noSauce && item.sauces.length === 0) {
+    if (item.itemType === "wings" || item.itemType === "boneless") {
+      const slots = sauceSlotsAllowed(item);
+      return t(
+        state,
+        `What sauce would you like? You can choose up to ${slots}.`,
+        `¿Qué salsa quieres? Puedes escoger hasta ${slots}.`
+      );
+    }
+
     return t(state, "What sauce would you like?", "¿Qué salsa quieres?");
   }
 
@@ -673,15 +672,15 @@ function nextQuestion(state, item) {
     if (item.includedDips.length === 0) {
       return t(
         state,
-        `What dip would you like? You get ${dipSlotsAllowed(item)}.`,
-        `¿Qué dip quieres? Te incluye ${dipSlotsAllowed(item)}.`
+        `What dip would you like? Ranch, blue cheese, chipotle ranch, or jalapeño ranch. You get ${dipSlotsAllowed(item)}.`,
+        `¿Qué dip quieres? Ranch, blue cheese, chipotle ranch o jalapeño ranch. Te incluye ${dipSlotsAllowed(item)}.`
       );
     }
 
     return t(
       state,
-      `I still need ${remaining} more dip${remaining > 1 ? "s" : ""}.`,
-      `Todavía me faltan ${remaining} dip${remaining > 1 ? "s" : ""}.`
+      `I still need ${remaining} more dip${remaining > 1 ? "s" : ""}. Ranch, blue cheese, chipotle ranch, or jalapeño ranch.`,
+      `Todavía me faltan ${remaining} dip${remaining > 1 ? "s" : ""}. Ranch, blue cheese, chipotle ranch o jalapeño ranch.`
     );
   }
 
@@ -693,32 +692,19 @@ function nextQuestion(state, item) {
     );
   }
 
-  if (
-    [
-      "8 wings combo",
-      "8 boneless combo",
-      "half rack combo",
-      "half rack and 4 bone in combo",
-      "fish combo",
-      "classic burger combo",
-      "chicken sandwich combo",
-      "flyin burger combo",
-      "buffalo burger combo"
-    ].includes(item.itemType) &&
-    !item.side
-  ) {
+  if (sideChoiceItems(item.itemType) && !item.side) {
     return t(
       state,
       "What side would you like: regular fries, sweet potato fries, or potato salad?",
-      "¿Qué acompañante quieres: papas, papas de camote o ensalada de papa?"
+      "¿Qué acompañante quieres: papas regulares, papas de camote o ensalada de papa?"
     );
   }
 
   if (item.itemType === "baked potato combo" && !item.drizzle) {
     return t(
       state,
-      "What drizzle would you like on top: ranch, blue cheese, chipotle ranch, or jalapeño ranch?",
-      "¿Qué drizzle quieres arriba: ranch, blue cheese, chipotle ranch o jalapeño ranch?"
+      "What drizzle would you like: ranch, blue cheese, chipotle ranch, or jalapeño ranch?",
+      "¿Qué drizzle quieres: ranch, blue cheese, chipotle ranch o jalapeño ranch?"
     );
   }
 
@@ -726,12 +712,16 @@ function nextQuestion(state, item) {
     return t(
       state,
       "Would you like everything on top or all on the side?",
-      "¿Lo quieres arriba o todo por un lado?"
+      "¿Lo quieres todo arriba o todo por un lado?"
     );
   }
 
   if (item.itemType === "baked potato combo" && !item.drink) {
-    return t(state, "Soft drink cup or bottled water?", "¿Vaso para refill o agua embotellada?");
+    return t(
+      state,
+      "Soft drink or bottled water?",
+      "¿Refresco o agua embotellada?"
+    );
   }
 
   return t(state, "Perfect. What would you like to add next?", "Perfecto. ¿Qué más te agrego?");
@@ -739,114 +729,109 @@ function nextQuestion(state, item) {
 
 function itemComplete(item) {
   if (!item.itemType) return false;
-
   if (item.pendingComboUpsell) return false;
   if (item.pendingIngredientConfirmation) return false;
   if (item.pendingSauceCorrection) return false;
 
   if (isWingBase(item)) {
-    if (!item.quantity) return false;
-    if (sauceSlotsAllowed(item) > 0 && !item.noSauce && item.sauces.length === 0) return false;
-    if (dipSlotsAllowed(item) > 0 && item.includedDips.length < dipSlotsAllowed(item)) return false;
-    return true;
+    return Boolean(
+      item.quantity &&
+      (item.noSauce || item.sauces.length > 0) &&
+      item.includedDips.length >= dipSlotsAllowed(item)
+    );
   }
 
   if (item.itemType === "ribs") {
-    if (!item.size) return false;
-    if (sauceSlotsAllowed(item) > 0 && !item.noSauce && item.sauces.length === 0) return false;
-    return true;
+    return Boolean(item.size && (item.noSauce || item.sauces.length > 0));
   }
 
   if (item.itemType === "8 wings combo" || item.itemType === "8 boneless combo") {
-    if (item.sauces.length === 0) return false;
-    if (item.includedDips.length < 1) return false;
-    if (!item.side) return false;
-    return true;
+    return Boolean(item.sauces.length >= 1 && item.includedDips.length >= 1 && item.side);
   }
 
   if (item.itemType === "half rack combo") {
-    if (item.sauces.length === 0) return false;
-    if (!item.side) return false;
-    return true;
+    return Boolean(item.sauces.length >= 1 && item.side);
   }
 
   if (item.itemType === "half rack and 4 bone in combo") {
-    if (item.sauces.length < 2) return false;
-    if (item.includedDips.length < 1) return false;
-    if (!item.side) return false;
-    return true;
+    return Boolean(item.sauces.length >= 2 && item.includedDips.length >= 1 && item.side);
   }
 
   if (item.itemType === "fish combo") {
     return Boolean(item.side);
   }
 
-  if (
-    item.itemType === "classic burger combo" ||
-    item.itemType === "chicken sandwich combo" ||
-    item.itemType === "flyin burger combo" ||
-    item.itemType === "buffalo burger combo"
-  ) {
-    if ((item.itemType === "chicken sandwich combo" || item.itemType === "flyin burger combo") && !item.chickenStyle) return false;
-    if (!item.ingredientConfirmed) return false;
-    if (!item.side) return false;
-    return true;
-  }
-
-  if (
-    item.itemType === "classic burger" ||
-    item.itemType === "chicken sandwich" ||
-    item.itemType === "flyin burger" ||
-    item.itemType === "buffalo burger"
-  ) {
-    if ((item.itemType === "chicken sandwich" || item.itemType === "flyin burger") && !item.chickenStyle) return false;
-    if (!item.ingredientConfirmed) return false;
-    return true;
-  }
-
-  if (item.itemType === "baked potato combo") {
-    if (!item.protein) return false;
-    if (item.protein === "chicken" && !item.chickenStyle) return false;
-    if (item.sauces.length === 0) return false;
-    if (!item.drizzle) return false;
-    if (!item.toppingMode) return false;
-    if (!item.drink) return false;
-    return true;
-  }
-
-  if (item.itemType === "house salad") return Boolean(item.dressing);
-  if (item.itemType === "flyin salad") return Boolean(item.dressing && item.chickenStyle);
-
-  if (item.itemType === "pork belly") {
-    if (item.sauces.length === 0) return false;
-    return true;
-  }
-
-  if (item.itemType === "corn ribs") {
-    if (item.sauces.length === 0) return false;
-    return true;
-  }
-
-  if (item.itemType === "kids boneless" || item.itemType === "kids wings") {
-    if (item.sauces.length === 0) return false;
-    if (item.includedDips.length < 1) return false;
-    return true;
-  }
-
-  if (isLoadedFries(item)) {
+  if (item.itemType === "classic burger" || item.itemType === "buffalo burger") {
     return Boolean(item.ingredientConfirmed);
   }
 
-  if (isStandaloneSimpleItem(item)) return true;
+  if (item.itemType === "classic burger combo" || item.itemType === "buffalo burger combo") {
+    return Boolean(item.ingredientConfirmed && item.side);
+  }
+
+  if (item.itemType === "chicken sandwich" || item.itemType === "flyin burger") {
+    return Boolean(item.chickenStyle && item.ingredientConfirmed);
+  }
+
+  if (item.itemType === "chicken sandwich combo" || item.itemType === "flyin burger combo") {
+    return Boolean(item.chickenStyle && item.ingredientConfirmed && item.side);
+  }
+
+  if (item.itemType === "baked potato combo") {
+    return Boolean(item.protein && (item.protein !== "chicken" || item.chickenStyle) && item.sauces.length >= 1 && item.drizzle && item.toppingMode && item.drink);
+  }
+
+  if (item.itemType === "house salad") return Boolean(item.dressing);
+  if (item.itemType === "flyin salad") return Boolean(item.chickenStyle && item.dressing);
+
+  if (item.itemType === "pork belly") return Boolean(item.sauces.length >= 1);
+  if (item.itemType === "corn ribs") return Boolean(item.sauces.length >= 1);
+  if (item.itemType === "mac bites") return Boolean(item.includedDips.length >= 1);
+
+  if (item.itemType === "kids boneless" || item.itemType === "kids wings") {
+    return Boolean(item.sauces.length >= 1 && item.includedDips.length >= 1);
+  }
+
+  if (item.itemType === "kids cheeseburger") {
+    return Boolean(item.ingredientConfirmed);
+  }
+
+  if (item.itemType === "sampler platter") {
+    return Boolean(item.sauces.length >= 1);
+  }
+
+  if (isLoadedFries(item)) return Boolean(item.ingredientConfirmed);
 
   return true;
 }
 
+/* ----------------------------- display ----------------------------- */
+
+function displaySauce(sauce, lang) {
+  if (sauce === "lime pepper") return lang === "es" ? "lime pepper" : "lime pepper";
+  return sauce;
+}
+
+function displaySide(side, lang) {
+  if (lang === "es") {
+    const map = {
+      "regular fries": "papas regulares",
+      "sweet potato fries": "papas de camote",
+      "potato salad": "ensalada de papa",
+      "tostones": "tostones",
+      "yuca fries": "papas de yuca",
+      "buffalo ranch fries": "buffalo ranch fries"
+    };
+    return map[side] || side;
+  }
+  return side;
+}
+
 function itemDisplay(item, lang = "en") {
   const mapEn = {
-    wings: "bone-in wings",
-    boneless: "boneless",
-    ribs: item.size === "full rack" ? "full rack korean style ribs" : "half rack korean style ribs",
+    "wings": "bone-in wings",
+    "boneless": "boneless",
+    "ribs": item.size === "full rack" ? "full rack korean style ribs" : "half rack korean style ribs",
     "8 wings combo": "8 wings combo",
     "8 boneless combo": "8 boneless combo",
     "half rack combo": "half rack combo",
@@ -854,23 +839,23 @@ function itemDisplay(item, lang = "en") {
     "fish combo": "fish combo",
     "classic burger": "classic burger",
     "classic burger combo": "classic burger combo",
-    "chicken sandwich": "chicken sandwich",
-    "chicken sandwich combo": "chicken sandwich combo",
-    "flyin burger": "flyin burger",
-    "flyin burger combo": "flyin burger combo",
     "buffalo burger": "buffalo burger",
     "buffalo burger combo": "buffalo burger combo",
-    "baked potato combo": "Flyin’ baked potato combo",
-    "flyin fries": "Flain Fries",
+    "chicken sandwich": "chicken sandwich",
+    "chicken sandwich combo": "chicken sandwich combo",
+    "flyin burger": "Flyin' Burger",
+    "flyin burger combo": "Flyin' Burger combo",
+    "baked potato combo": "Flyin' baked potato combo",
+    "flyin fries": "Flyin' Fries",
     "pork belly fries": "pork belly fries",
     "chicken parmesan fries": "chicken parmesan fries",
     "buffalo ranch fries": "buffalo ranch fries",
     "house salad": "house salad",
-    "flyin salad": "flyin salad",
-    "pork belly": "6-piece pork belly",
+    "flyin salad": "Flyin' Salad",
+    "pork belly": "order of pork belly",
     "mac bites": "mac bites",
     "onion rings": "onion rings",
-    "flyin corn": "flyin corn",
+    "flyin corn": "Flyin' corn",
     "corn ribs": "corn ribs",
     "mozzarella sticks": "mozzarella sticks",
     "sampler platter": "sampler platter",
@@ -880,9 +865,9 @@ function itemDisplay(item, lang = "en") {
   };
 
   const mapEs = {
-    wings: "alitas con hueso",
-    boneless: "boneless",
-    ribs: item.size === "full rack" ? "rack completo de korean style ribs" : "medio rack de korean style ribs",
+    "wings": "alitas con hueso",
+    "boneless": "boneless",
+    "ribs": item.size === "full rack" ? "rack completo de korean style ribs" : "medio rack de korean style ribs",
     "8 wings combo": "combo de 8 alitas",
     "8 boneless combo": "combo de 8 boneless",
     "half rack combo": "combo de medio rack",
@@ -890,23 +875,23 @@ function itemDisplay(item, lang = "en") {
     "fish combo": "combo de pescado",
     "classic burger": "classic burger",
     "classic burger combo": "classic burger combo",
-    "chicken sandwich": "chicken sandwich",
-    "chicken sandwich combo": "chicken sandwich combo",
-    "flyin burger": "flyin burger",
-    "flyin burger combo": "flyin burger combo",
     "buffalo burger": "buffalo burger",
     "buffalo burger combo": "buffalo burger combo",
-    "baked potato combo": "combo de Flyin’ baked potato",
-    "flyin fries": "Flain Fries",
+    "chicken sandwich": "chicken sandwich",
+    "chicken sandwich combo": "chicken sandwich combo",
+    "flyin burger": "Flyin' Burger",
+    "flyin burger combo": "Flyin' Burger combo",
+    "baked potato combo": "combo de baked potato",
+    "flyin fries": "Flyin' Fries",
     "pork belly fries": "pork belly fries",
     "chicken parmesan fries": "chicken parmesan fries",
     "buffalo ranch fries": "buffalo ranch fries",
     "house salad": "house salad",
-    "flyin salad": "flyin salad",
-    "pork belly": "pork belly de 6 piezas",
+    "flyin salad": "Flyin' Salad",
+    "pork belly": "orden de pork belly",
     "mac bites": "mac bites",
     "onion rings": "onion rings",
-    "flyin corn": "flyin corn",
+    "flyin corn": "Flyin' corn",
     "corn ribs": "corn ribs",
     "mozzarella sticks": "mozzarella sticks",
     "sampler platter": "sampler platter",
@@ -916,6 +901,12 @@ function itemDisplay(item, lang = "en") {
   };
 
   return lang === "es" ? (mapEs[item.itemType] || item.itemType) : (mapEn[item.itemType] || item.itemType);
+}
+
+function countList(list) {
+  const counts = {};
+  for (const item of list || []) counts[item] = (counts[item] || 0) + 1;
+  return Object.entries(counts).map(([name, qty]) => `${qty} ${name}`).join(", ");
 }
 
 function summaryForItem(item, lang = "en") {
@@ -932,43 +923,35 @@ function summaryForItem(item, lang = "en") {
       parts.push(lang === "es" ? "sin salsa" : "no sauce");
     } else if (item.sauces.length) {
       parts.push(item.sauces.map((s) => displaySauce(s, lang)).join(lang === "es" ? " y " : " and "));
-      if (item.sauceOnSide) {
-        parts.push(lang === "es" ? "aparte" : "on the side");
-      }
+      if (item.sauceOnSide) parts.push(lang === "es" ? "aparte" : "on the side");
     }
   }
 
-  if (item.includedDips.length) {
-    parts.push((lang === "es" ? "dips " : "dips ") + countList(item.includedDips));
-  }
+  if (item.includedDips.length) parts.push((lang === "es" ? "dips " : "dips ") + countList(item.includedDips));
+  if (item.extraDips.length) parts.push((lang === "es" ? "extra " : "extra ") + countList(item.extraDips));
+  if (item.side) parts.push(displaySide(item.side, lang));
 
-  if (item.extraDips.length) {
-    parts.push((lang === "es" ? "extra " : "extra ") + countList(item.extraDips));
-  }
-
-  if (item.side) {
-    parts.push(displaySide(item.side, lang));
+  if (item.chickenStyle) {
+    if (lang === "es") parts.push(item.chickenStyle === "grilled" ? "pollo a la plancha" : "pollo frito");
+    else parts.push(item.chickenStyle === "grilled" ? "grilled chicken" : "fried chicken");
   }
 
   if (item.protein) {
-    parts.push(displayProtein(item.protein, lang));
+    if (lang === "es") {
+      const proteins = {
+        "chicken": "pollo",
+        "steak": "carne asada",
+        "pork belly": "pork belly",
+        "no protein": "sin proteína"
+      };
+      parts.push(proteins[item.protein] || item.protein);
+    } else {
+      parts.push(item.protein);
+    }
   }
 
-  if (item.chickenStyle) {
-    parts.push(
-      lang === "es"
-        ? `pollo ${displayChickenStyle(item.chickenStyle, lang)}`
-        : `${displayChickenStyle(item.chickenStyle, lang)} chicken`
-    );
-  }
-
-  if (item.dressing) {
-    parts.push(lang === "es" ? `aderezo ${item.dressing}` : `dressing ${item.dressing}`);
-  }
-
-  if (item.drizzle) {
-    parts.push(lang === "es" ? `drizzle ${item.drizzle}` : `drizzle ${item.drizzle}`);
-  }
+  if (item.dressing) parts.push(lang === "es" ? `aderezo ${item.dressing}` : `dressing ${item.dressing}`);
+  if (item.drizzle) parts.push(lang === "es" ? `drizzle ${item.drizzle}` : `drizzle ${item.drizzle}`);
 
   if (item.toppingMode) {
     parts.push(
@@ -982,12 +965,10 @@ function summaryForItem(item, lang = "en") {
     );
   }
 
-  if (item.modifications.length) {
-    if (lang === "es") {
-      parts.push(item.modifications.map((m) => m.replace(/^no /, "sin ")).join(", "));
-    } else {
-      parts.push(item.modifications.join(", "));
-    }
+  const filteredMods = (item.modifications || []).filter((m) => m !== "on the side");
+  if (filteredMods.length) {
+    if (lang === "es") parts.push(filteredMods.map((m) => m.replace(/^no /, "sin ")).join(", "));
+    else parts.push(filteredMods.join(", "));
   }
 
   return parts.join(", ");
@@ -998,43 +979,28 @@ function fullOrderSummary(state) {
   return state.items.map((item) => summaryForItem(item, lang)).join("; ");
 }
 
-/* ----------------------------- response helpers ----------------------------- */
+/* ----------------------------- route helpers ----------------------------- */
 
-function toolResult(name, toolCallId, result) {
-  return {
-    name,
-    toolCallId,
-    result: JSON.stringify(result)
-  };
-}
-
-function buildPayload(state, speak, ok = true, extra = {}) {
-  return {
-    ok,
-    language: state.language,
-    customerName: state.customerName,
-    currentItem: state.currentItem,
-    orderSummary: fullOrderSummary(state),
-    speak,
-    ...extra
-  };
-}
-
-/* ----------------------------- request helpers ----------------------------- */
-
-function getLatestCustomerText(message) {
-  const msgs = message?.artifact?.messages;
-  if (Array.isArray(msgs)) {
-    for (let i = msgs.length - 1; i >= 0; i -= 1) {
-      const msg = msgs[i];
-      if (msg?.role === "user" && typeof msg?.message === "string") {
-        return msg.message;
-      }
-    }
+function setBurgerConfirmationIfNeeded(item) {
+  if (isBurgerLike(item)) {
+    item.pendingIngredientConfirmation = "burger";
   }
-  if (typeof message?.customer?.message === "string") return message.customer.message;
-  if (typeof message?.transcript === "string") return message.transcript;
-  return "";
+}
+
+function setLoadedConfirmationIfNeeded(item) {
+  if (isLoadedFries(item)) {
+    item.pendingIngredientConfirmation = "loaded";
+  }
+}
+
+function addBuffaloBurgerNotes(item) {
+  if (item.itemType === "buffalo burger combo") {
+    item.notes.push("Use classic burger combo");
+    item.notes.push("Remove mayo");
+    item.notes.push("Replace mayo with ranch");
+    item.notes.push("Add buffalo sauce side charge");
+    item.notes.push("Kitchen note: Sub ranch for mayo + buffalo sauce side charge");
+  }
 }
 
 /* ----------------------------- routes ----------------------------- */
@@ -1066,7 +1032,6 @@ app.post("/vapi/tools", async (req, res) => {
     const callId = message.call?.id || "unknown-call";
     const state = getCallState(callId);
     const latestText = getLatestCustomerText(message);
-
     maybeLockLanguage(state, latestText);
 
     const results = [];
@@ -1086,17 +1051,11 @@ app.post("/vapi/tools", async (req, res) => {
           let itemType = parseItem(rawItem);
 
           if (!itemType) {
-            results.push(
-              toolResult(
-                name,
-                toolCallId,
-                buildPayload(
-                  state,
-                  t(state, "What item would you like?", "¿Qué item quieres?"),
-                  false
-                )
-              )
-            );
+            results.push(toolResult(name, toolCallId, buildPayload(
+              state,
+              t(state, "What item would you like?", "¿Qué item quieres?"),
+              false
+            )));
             break;
           }
 
@@ -1107,9 +1066,7 @@ app.post("/vapi/tools", async (req, res) => {
             state.currentItem.itemType = itemType;
           }
 
-          if (parameters.quantity != null) {
-            state.currentItem.quantity = Number(parameters.quantity);
-          }
+          if (parameters.quantity != null) state.currentItem.quantity = Number(parameters.quantity);
 
           if (parameters.size) {
             const sizeNorm = normalize(parameters.size);
@@ -1120,203 +1077,91 @@ app.post("/vapi/tools", async (req, res) => {
             }
           }
 
-          if (parameters.noSauce) {
-            state.currentItem.noSauce = true;
-          }
-
-          if (parameters.sauceOnSide) {
-            state.currentItem.sauceOnSide = true;
-          }
-
-          if (parameters.protein) {
-            state.currentItem.protein = parseProtein(parameters.protein);
-          }
-
-          if (parameters.chickenStyle) {
-            state.currentItem.chickenStyle = parseChickenStyle(parameters.chickenStyle);
-          }
-
-          if (parameters.dressing) {
-            state.currentItem.dressing = parseDressing(parameters.dressing);
-          }
+          if (parameters.noSauce) state.currentItem.noSauce = true;
+          if (parameters.sauceOnSide) state.currentItem.sauceOnSide = true;
 
           if (parameters.side) {
             const side = parseSide(parameters.side);
-            if (side && comboSideAllowed(state.currentItem, side)) {
-              state.currentItem.side = side;
-            }
+            if (side && comboSideAllowed(state.currentItem.itemType, side)) state.currentItem.side = side;
           }
 
-          if (Array.isArray(parameters.modifications)) {
-            state.currentItem.modifications = parseMods(parameters.modifications);
-          }
+          if (parameters.protein) state.currentItem.protein = parseProtein(parameters.protein);
+          if (parameters.chickenStyle) state.currentItem.chickenStyle = parseChickenStyle(parameters.chickenStyle);
+          if (Array.isArray(parameters.modifications)) state.currentItem.modifications = parseMods(parameters.modifications);
 
-          if (state.currentItem.itemType === "buffalo burger") {
-            state.currentItem.notes.push("Use classic burger build");
-            state.currentItem.notes.push("Buffalo burger requested as standalone");
-          }
-
-          if (state.currentItem.itemType === "buffalo burger combo") {
-            state.currentItem.notes.push("Use classic burger combo");
-            state.currentItem.notes.push("Remove mayo");
-            state.currentItem.notes.push("Sub ranch for mayo");
-            state.currentItem.notes.push("Add mild buffalo sauce on the side with extra charge");
-          }
-
-          setLoadedFriesDefaults(state.currentItem);
+          setLoadedItemDefaults(state.currentItem);
 
           if (isWingBase(state.currentItem) && state.currentItem.quantity && !validWingQuantity(state.currentItem.quantity)) {
-            results.push(
-              toolResult(
-                name,
-                toolCallId,
-                buildPayload(
-                  state,
-                  t(state, "We have 6, 9, 12, 18, 24, or 48.", "Tenemos 6, 9, 12, 18, 24 o 48."),
-                  false
-                )
-              )
-            );
+            results.push(toolResult(name, toolCallId, buildPayload(
+              state,
+              t(state, "We have 6, 9, 12, 18, 24, or 48.", "Tenemos 6, 9, 12, 18, 24 o 48."),
+              false
+            )));
             break;
           }
 
           if (comboUpsellAvailable(state.currentItem)) {
             state.currentItem.pendingComboUpsell = true;
             state.currentItem.pendingComboTarget = getComboTarget(state.currentItem.itemType);
+          } else {
+            setBurgerConfirmationIfNeeded(state.currentItem);
+            setLoadedConfirmationIfNeeded(state.currentItem);
           }
 
-          if (
-            isLoadedFries(state.currentItem) ||
-            state.currentItem.itemType === "classic burger" ||
-            state.currentItem.itemType === "classic burger combo" ||
-            state.currentItem.itemType === "buffalo burger" ||
-            state.currentItem.itemType === "buffalo burger combo"
-          ) {
-            if (!state.currentItem.pendingComboUpsell) {
-              results.push(
-                toolResult(
-                  name,
-                  toolCallId,
-                  buildPayload(state, nextQuestion(state, state.currentItem))
-                )
-              );
-              break;
-            }
-          }
-
-          results.push(
-            toolResult(
-              name,
-              toolCallId,
-              buildPayload(state, nextQuestion(state, state.currentItem))
-            )
-          );
+          results.push(toolResult(name, toolCallId, buildPayload(
+            state,
+            nextQuestion(state, state.currentItem)
+          )));
           break;
         }
 
         case "respond_combo_upsell": {
           if (!state.currentItem.pendingComboUpsell) {
-            results.push(
-              toolResult(
-                name,
-                toolCallId,
-                buildPayload(state, nextQuestion(state, state.currentItem), false)
-              )
-            );
+            results.push(toolResult(name, toolCallId, buildPayload(
+              state,
+              nextQuestion(state, state.currentItem),
+              false
+            )));
             break;
           }
 
           const accept = Boolean(parameters.accept);
-          const target = state.currentItem.pendingComboTarget;
 
-          if (accept && target) {
-            state.currentItem.itemType = target;
-
-            if (state.currentItem.itemType === "buffalo burger combo") {
-              state.currentItem.notes.push("Use classic burger combo");
-              state.currentItem.notes.push("Remove mayo");
-              state.currentItem.notes.push("Sub ranch for mayo");
-              state.currentItem.notes.push("Add mild buffalo sauce on the side with extra charge");
-            }
+          if (accept && state.currentItem.pendingComboTarget) {
+            state.currentItem.itemType = state.currentItem.pendingComboTarget;
+            addBuffaloBurgerNotes(state.currentItem);
           }
 
           state.currentItem.pendingComboUpsell = false;
           state.currentItem.pendingComboTarget = null;
 
-          if (
-            state.currentItem.itemType === "classic burger" ||
-            state.currentItem.itemType === "classic burger combo" ||
-            state.currentItem.itemType === "buffalo burger" ||
-            state.currentItem.itemType === "buffalo burger combo" ||
-            isLoadedFries(state.currentItem)
-          ) {
-            state.currentItem.pendingIngredientConfirmation = state.currentItem.itemType;
-          }
+          setBurgerConfirmationIfNeeded(state.currentItem);
+          setLoadedConfirmationIfNeeded(state.currentItem);
 
-          results.push(
-            toolResult(
-              name,
-              toolCallId,
-              buildPayload(state, nextQuestion(state, state.currentItem))
-            )
-          );
-          break;
-        }
-
-        case "confirm_item_ingredients": {
-          if (!state.currentItem.pendingIngredientConfirmation) {
-            results.push(
-              toolResult(
-                name,
-                toolCallId,
-                buildPayload(state, nextQuestion(state, state.currentItem), false)
-              )
-            );
-            break;
-          }
-
-          state.currentItem.pendingIngredientConfirmation = null;
-          state.currentItem.ingredientConfirmed = true;
-
-          results.push(
-            toolResult(
-              name,
-              toolCallId,
-              buildPayload(state, nextQuestion(state, state.currentItem))
-            )
-          );
+          results.push(toolResult(name, toolCallId, buildPayload(
+            state,
+            nextQuestion(state, state.currentItem)
+          )));
           break;
         }
 
         case "set_quantity": {
           if (!isWingBase(state.currentItem)) {
-            results.push(
-              toolResult(
-                name,
-                toolCallId,
-                buildPayload(
-                  state,
-                  t(state, "This item does not use wing quantity.", "Este item no usa cantidad de alitas."),
-                  false
-                )
-              )
-            );
+            results.push(toolResult(name, toolCallId, buildPayload(
+              state,
+              t(state, "This item does not use wing quantity.", "Este item no usa cantidad de alitas."),
+              false
+            )));
             break;
           }
 
           const qty = Number(parameters.quantity);
           if (!validWingQuantity(qty)) {
-            results.push(
-              toolResult(
-                name,
-                toolCallId,
-                buildPayload(
-                  state,
-                  t(state, "We have 6, 9, 12, 18, 24, or 48.", "Tenemos 6, 9, 12, 18, 24 o 48."),
-                  false
-                )
-              )
-            );
+            results.push(toolResult(name, toolCallId, buildPayload(
+              state,
+              t(state, "We have 6, 9, 12, 18, 24, or 48.", "Tenemos 6, 9, 12, 18, 24 o 48."),
+              false
+            )));
             break;
           }
 
@@ -1327,29 +1172,20 @@ app.post("/vapi/tools", async (req, res) => {
             state.currentItem.pendingComboTarget = getComboTarget(state.currentItem.itemType);
           }
 
-          results.push(
-            toolResult(
-              name,
-              toolCallId,
-              buildPayload(state, nextQuestion(state, state.currentItem))
-            )
-          );
+          results.push(toolResult(name, toolCallId, buildPayload(
+            state,
+            nextQuestion(state, state.currentItem)
+          )));
           break;
         }
 
         case "set_size": {
           if (state.currentItem.itemType !== "ribs") {
-            results.push(
-              toolResult(
-                name,
-                toolCallId,
-                buildPayload(
-                  state,
-                  t(state, "This item does not need rack size.", "Este item no necesita tamaño de rack."),
-                  false
-                )
-              )
-            );
+            results.push(toolResult(name, toolCallId, buildPayload(
+              state,
+              t(state, "This item does not need rack size.", "Este item no necesita tamaño de rack."),
+              false
+            )));
             break;
           }
 
@@ -1359,17 +1195,11 @@ app.post("/vapi/tools", async (req, res) => {
           } else if (sizeNorm.includes("full") || sizeNorm.includes("completo")) {
             state.currentItem.size = "full rack";
           } else {
-            results.push(
-              toolResult(
-                name,
-                toolCallId,
-                buildPayload(
-                  state,
-                  t(state, "Half rack or full rack?", "¿Medio rack o rack completo?"),
-                  false
-                )
-              )
-            );
+            results.push(toolResult(name, toolCallId, buildPayload(
+              state,
+              t(state, "Half rack or full rack?", "¿Medio rack o rack completo?"),
+              false
+            )));
             break;
           }
 
@@ -1378,44 +1208,23 @@ app.post("/vapi/tools", async (req, res) => {
             state.currentItem.pendingComboTarget = getComboTarget(state.currentItem.itemType);
           }
 
-          results.push(
-            toolResult(
-              name,
-              toolCallId,
-              buildPayload(state, nextQuestion(state, state.currentItem))
-            )
-          );
+          results.push(toolResult(name, toolCallId, buildPayload(
+            state,
+            nextQuestion(state, state.currentItem)
+          )));
           break;
         }
 
         case "set_sauces": {
-          if (sauceSlotsAllowed(state.currentItem) === 0 && !state.currentItem.noSauce) {
-            results.push(
-              toolResult(
-                name,
-                toolCallId,
-                buildPayload(
-                  state,
-                  t(state, "This item does not need sauce selection.", "Este item no necesita selección de salsa."),
-                  false
-                )
-              )
-            );
-            break;
-          }
-
           if (parameters.noSauce) {
             state.currentItem.noSauce = true;
             state.currentItem.sauces = [];
             state.currentItem.pendingSauceCorrection = null;
 
-            results.push(
-              toolResult(
-                name,
-                toolCallId,
-                buildPayload(state, nextQuestion(state, state.currentItem))
-              )
-            );
+            results.push(toolResult(name, toolCallId, buildPayload(
+              state,
+              nextQuestion(state, state.currentItem)
+            )));
             break;
           }
 
@@ -1434,49 +1243,34 @@ app.post("/vapi/tools", async (req, res) => {
 
           if (correction) {
             state.currentItem.pendingSauceCorrection = correction;
-            results.push(
-              toolResult(
-                name,
-                toolCallId,
-                buildPayload(state, nextQuestion(state, state.currentItem))
-              )
-            );
+            results.push(toolResult(name, toolCallId, buildPayload(
+              state,
+              nextQuestion(state, state.currentItem)
+            )));
             break;
           }
 
           const sauces = unique(finalSauces);
-
           if (!sauces.length) {
-            results.push(
-              toolResult(
-                name,
-                toolCallId,
-                buildPayload(
-                  state,
-                  t(state, "What sauce would you like?", "¿Qué salsa quieres?"),
-                  false
-                )
-              )
-            );
+            results.push(toolResult(name, toolCallId, buildPayload(
+              state,
+              t(state, "What sauce would you like?", "¿Qué salsa quieres?"),
+              false
+            )));
             break;
           }
 
-          if (sauces.length > sauceSlotsAllowed(state.currentItem)) {
-            results.push(
-              toolResult(
-                name,
-                toolCallId,
-                buildPayload(
-                  state,
-                  t(
-                    state,
-                    `You can only choose ${sauceSlotsAllowed(state.currentItem)} sauce${sauceSlotsAllowed(state.currentItem) > 1 ? "s" : ""} for that item.`,
-                    `Solo puedes escoger ${sauceSlotsAllowed(state.currentItem)} salsa${sauceSlotsAllowed(state.currentItem) > 1 ? "s" : ""} para ese item.`
-                  ),
-                  false
-                )
-              )
-            );
+          const maxSauces = sauceSlotsAllowed(state.currentItem);
+          if (maxSauces > 0 && sauces.length > maxSauces) {
+            results.push(toolResult(name, toolCallId, buildPayload(
+              state,
+              t(
+                state,
+                `You can only choose up to ${maxSauces} sauce${maxSauces > 1 ? "s" : ""} for that item.`,
+                `Solo puedes escoger hasta ${maxSauces} salsa${maxSauces > 1 ? "s" : ""} para ese item.`
+              ),
+              false
+            )));
             break;
           }
 
@@ -1484,30 +1278,24 @@ app.post("/vapi/tools", async (req, res) => {
           state.currentItem.sauceOnSide = Boolean(parameters.onSide);
           state.currentItem.pendingSauceCorrection = null;
 
-          results.push(
-            toolResult(
-              name,
-              toolCallId,
-              buildPayload(state, nextQuestion(state, state.currentItem))
-            )
-          );
+          results.push(toolResult(name, toolCallId, buildPayload(
+            state,
+            nextQuestion(state, state.currentItem)
+          )));
           break;
         }
 
         case "resolve_pending_sauce_correction": {
           if (!state.currentItem.pendingSauceCorrection) {
-            results.push(
-              toolResult(
-                name,
-                toolCallId,
-                buildPayload(state, nextQuestion(state, state.currentItem), false)
-              )
-            );
+            results.push(toolResult(name, toolCallId, buildPayload(
+              state,
+              nextQuestion(state, state.currentItem),
+              false
+            )));
             break;
           }
 
           const accept = Boolean(parameters.accept);
-
           if (accept) {
             state.currentItem.sauces = [state.currentItem.pendingSauceCorrection];
           }
@@ -1515,90 +1303,61 @@ app.post("/vapi/tools", async (req, res) => {
           state.currentItem.pendingSauceCorrection = null;
 
           if (!accept) {
-            results.push(
-              toolResult(
-                name,
-                toolCallId,
-                buildPayload(
-                  state,
-                  t(state, "What sauce would you like instead?", "¿Qué salsa quieres en su lugar?")
-                )
-              )
-            );
+            results.push(toolResult(name, toolCallId, buildPayload(
+              state,
+              t(state, "What sauce would you like instead?", "¿Qué salsa quieres en lugar?")
+            )));
             break;
           }
 
-          results.push(
-            toolResult(
-              name,
-              toolCallId,
-              buildPayload(state, nextQuestion(state, state.currentItem))
-            )
-          );
+          results.push(toolResult(name, toolCallId, buildPayload(
+            state,
+            nextQuestion(state, state.currentItem)
+          )));
           break;
         }
 
         case "set_dips": {
           const dips = mapListKeepRepeats(parameters.dips || [], DIP_ALIASES);
+          const allowed = dipSlotsAllowed(state.currentItem);
 
-          if (dipSlotsAllowed(state.currentItem) === 0) {
-            results.push(
-              toolResult(
-                name,
-                toolCallId,
-                buildPayload(
-                  state,
-                  t(state, "This item does not need included dips.", "Este item no necesita dips incluidos."),
-                  false
-                )
-              )
-            );
+          if (allowed === 0) {
+            results.push(toolResult(name, toolCallId, buildPayload(
+              state,
+              t(state, "This item does not need dips.", "Este item no necesita dips."),
+              false
+            )));
             break;
           }
 
           if (!dips.length) {
-            results.push(
-              toolResult(
-                name,
-                toolCallId,
-                buildPayload(
-                  state,
-                  t(state, "What dip would you like?", "¿Qué dip quieres?"),
-                  false
-                )
-              )
-            );
+            results.push(toolResult(name, toolCallId, buildPayload(
+              state,
+              t(state, "What dip would you like?", "¿Qué dip quieres?"),
+              false
+            )));
             break;
           }
 
-          if (dips.length > dipSlotsAllowed(state.currentItem)) {
-            results.push(
-              toolResult(
-                name,
-                toolCallId,
-                buildPayload(
-                  state,
-                  t(
-                    state,
-                    `You only get ${dipSlotsAllowed(state.currentItem)} dip${dipSlotsAllowed(state.currentItem) > 1 ? "s" : ""} included.`,
-                    `Solo te incluye ${dipSlotsAllowed(state.currentItem)} dip${dipSlotsAllowed(state.currentItem) > 1 ? "s" : ""}.`
-                  ),
-                  false
-                )
-              )
-            );
+          if (dips.length > allowed) {
+            results.push(toolResult(name, toolCallId, buildPayload(
+              state,
+              t(
+                state,
+                `You only get ${allowed} dip${allowed > 1 ? "s" : ""} included.`,
+                `Solo te incluye ${allowed} dip${allowed > 1 ? "s" : ""}.`
+              ),
+              false
+            )));
             break;
           }
 
           state.currentItem.includedDips = dips;
 
-          results.push(
-            toolResult(
-              name,
-              toolCallId,
-              buildPayload(state, nextQuestion(state, state.currentItem))
-            )
-          );
+          results.push(toolResult(name, toolCallId, buildPayload(
+            state,
+            nextQuestion(state, state.currentItem)
+          )));
           break;
         }
 
@@ -1606,29 +1365,20 @@ app.post("/vapi/tools", async (req, res) => {
           const extra = mapListKeepRepeats(parameters.extraDips || [], DIP_ALIASES);
 
           if (!extra.length) {
-            results.push(
-              toolResult(
-                name,
-                toolCallId,
-                buildPayload(
-                  state,
-                  t(state, "What extra dip would you like?", "¿Qué dip extra quieres?"),
-                  false
-                )
-              )
-            );
+            results.push(toolResult(name, toolCallId, buildPayload(
+              state,
+              t(state, "What extra dip would you like?", "¿Qué dip extra quieres?"),
+              false
+            )));
             break;
           }
 
           state.currentItem.extraDips = [...state.currentItem.extraDips, ...extra];
 
-          results.push(
-            toolResult(
-              name,
-              toolCallId,
-              buildPayload(state, t(state, "Got it.", "Listo."))
-            )
-          );
+          results.push(toolResult(name, toolCallId, buildPayload(
+            state,
+            t(state, "Got it.", "Listo.")
+          )));
           break;
         }
 
@@ -1636,119 +1386,79 @@ app.post("/vapi/tools", async (req, res) => {
           const side = parseSide(parameters.side);
 
           if (!side) {
-            results.push(
-              toolResult(
-                name,
-                toolCallId,
-                buildPayload(
-                  state,
-                  t(state, "What side would you like?", "¿Qué acompañante quieres?"),
-                  false
-                )
-              )
-            );
+            results.push(toolResult(name, toolCallId, buildPayload(
+              state,
+              t(state, "What side would you like?", "¿Qué acompañante quieres?"),
+              false
+            )));
             break;
           }
 
-          if (!comboSideAllowed(state.currentItem, side)) {
-            results.push(
-              toolResult(
-                name,
-                toolCallId,
-                buildPayload(
-                  state,
-                  t(state, "That side is not available for this combo.", "Ese acompañante no está disponible para este combo."),
-                  false
-                )
-              )
-            );
+          if (!comboSideAllowed(state.currentItem.itemType, side)) {
+            results.push(toolResult(name, toolCallId, buildPayload(
+              state,
+              t(state, "That side is not available for this combo.", "Ese acompañante no está disponible para este combo."),
+              false
+            )));
             break;
           }
 
           state.currentItem.side = side;
 
-          results.push(
-            toolResult(
-              name,
-              toolCallId,
-              buildPayload(state, nextQuestion(state, state.currentItem))
-            )
-          );
+          results.push(toolResult(name, toolCallId, buildPayload(
+            state,
+            nextQuestion(state, state.currentItem)
+          )));
           break;
         }
 
         case "set_dressing": {
-          const dressing = parseDressing(parameters.dressing);
+          const dressing = parseDip(parameters.dressing);
 
           if (!dressing) {
-            results.push(
-              toolResult(
-                name,
-                toolCallId,
-                buildPayload(
-                  state,
-                  t(state, "What dressing would you like?", "¿Qué aderezo quieres?"),
-                  false
-                )
-              )
-            );
+            results.push(toolResult(name, toolCallId, buildPayload(
+              state,
+              t(state, "What dressing would you like?", "¿Qué aderezo quieres?"),
+              false
+            )));
             break;
           }
 
           state.currentItem.dressing = dressing;
 
-          results.push(
-            toolResult(
-              name,
-              toolCallId,
-              buildPayload(state, nextQuestion(state, state.currentItem))
-            )
-          );
+          results.push(toolResult(name, toolCallId, buildPayload(
+            state,
+            nextQuestion(state, state.currentItem)
+          )));
           break;
         }
 
         case "set_protein": {
           if (state.currentItem.itemType !== "baked potato combo") {
-            results.push(
-              toolResult(
-                name,
-                toolCallId,
-                buildPayload(
-                  state,
-                  t(state, "This item does not need a protein choice.", "Este item no necesita proteína."),
-                  false
-                )
-              )
-            );
+            results.push(toolResult(name, toolCallId, buildPayload(
+              state,
+              t(state, "This item does not need a protein choice.", "Este item no necesita proteína."),
+              false
+            )));
             break;
           }
 
           const protein = parseProtein(parameters.protein);
-
           if (!protein) {
-            results.push(
-              toolResult(
-                name,
-                toolCallId,
-                buildPayload(
-                  state,
-                  t(state, "Chicken, steak, pork belly, or no protein?", "¿Pollo, carne asada, pork belly o sin proteína?"),
-                  false
-                )
-              )
-            );
+            results.push(toolResult(name, toolCallId, buildPayload(
+              state,
+              t(state, "Chicken, steak, pork belly, or no protein?", "¿Pollo, carne asada, pork belly o sin proteína?"),
+              false
+            )));
             break;
           }
 
           state.currentItem.protein = protein;
 
-          results.push(
-            toolResult(
-              name,
-              toolCallId,
-              buildPayload(state, nextQuestion(state, state.currentItem))
-            )
-          );
+          results.push(toolResult(name, toolCallId, buildPayload(
+            state,
+            nextQuestion(state, state.currentItem)
+          )));
           break;
         }
 
@@ -1756,38 +1466,22 @@ app.post("/vapi/tools", async (req, res) => {
           const style = parseChickenStyle(parameters.chickenStyle);
 
           if (!style) {
-            results.push(
-              toolResult(
-                name,
-                toolCallId,
-                buildPayload(
-                  state,
-                  t(state, "Grilled or fried?", "¿A la plancha o frito?"),
-                  false
-                )
-              )
-            );
+            results.push(toolResult(name, toolCallId, buildPayload(
+              state,
+              t(state, "Grilled or fried?", "¿A la plancha o frito?"),
+              false
+            )));
             break;
           }
 
           state.currentItem.chickenStyle = style;
 
-          if (
-            state.currentItem.itemType === "chicken sandwich" ||
-            state.currentItem.itemType === "chicken sandwich combo" ||
-            state.currentItem.itemType === "flyin burger" ||
-            state.currentItem.itemType === "flyin burger combo"
-          ) {
-            state.currentItem.pendingIngredientConfirmation = state.currentItem.itemType;
-          }
+          if (isBurgerLike(state.currentItem)) setBurgerConfirmationIfNeeded(state.currentItem);
 
-          results.push(
-            toolResult(
-              name,
-              toolCallId,
-              buildPayload(state, nextQuestion(state, state.currentItem))
-            )
-          );
+          results.push(toolResult(name, toolCallId, buildPayload(
+            state,
+            nextQuestion(state, state.currentItem)
+          )));
           break;
         }
 
@@ -1795,29 +1489,20 @@ app.post("/vapi/tools", async (req, res) => {
           const drizzle = parseDip(parameters.drizzle);
 
           if (!drizzle) {
-            results.push(
-              toolResult(
-                name,
-                toolCallId,
-                buildPayload(
-                  state,
-                  t(state, "What drizzle would you like on top?", "¿Qué drizzle quieres arriba?"),
-                  false
-                )
-              )
-            );
+            results.push(toolResult(name, toolCallId, buildPayload(
+              state,
+              t(state, "What drizzle would you like?", "¿Qué drizzle quieres?"),
+              false
+            )));
             break;
           }
 
           state.currentItem.drizzle = drizzle;
 
-          results.push(
-            toolResult(
-              name,
-              toolCallId,
-              buildPayload(state, nextQuestion(state, state.currentItem))
-            )
-          );
+          results.push(toolResult(name, toolCallId, buildPayload(
+            state,
+            nextQuestion(state, state.currentItem)
+          )));
           break;
         }
 
@@ -1829,27 +1514,18 @@ app.post("/vapi/tools", async (req, res) => {
           } else if (mode.includes("top") || mode.includes("arriba")) {
             state.currentItem.toppingMode = "on_top";
           } else {
-            results.push(
-              toolResult(
-                name,
-                toolCallId,
-                buildPayload(
-                  state,
-                  t(state, "Would you like everything on top or all on the side?", "¿Lo quieres arriba o todo por un lado?"),
-                  false
-                )
-              )
-            );
+            results.push(toolResult(name, toolCallId, buildPayload(
+              state,
+              t(state, "Would you like everything on top or all on the side?", "¿Lo quieres todo arriba o todo por un lado?"),
+              false
+            )));
             break;
           }
 
-          results.push(
-            toolResult(
-              name,
-              toolCallId,
-              buildPayload(state, nextQuestion(state, state.currentItem))
-            )
-          );
+          results.push(toolResult(name, toolCallId, buildPayload(
+            state,
+            nextQuestion(state, state.currentItem)
+          )));
           break;
         }
 
@@ -1860,34 +1536,25 @@ app.post("/vapi/tools", async (req, res) => {
             state.currentItem.drink = "bottled water";
           } else if (
             drinkNorm.includes("soft") ||
-            drinkNorm.includes("fountain") ||
-            drinkNorm.includes("cup") ||
-            drinkNorm.includes("refill") ||
+            drinkNorm.includes("soda") ||
+            drinkNorm.includes("refresco") ||
+            drinkNorm.includes("drink") ||
             drinkNorm.includes("vaso")
           ) {
             state.currentItem.drink = "soft drink";
           } else {
-            results.push(
-              toolResult(
-                name,
-                toolCallId,
-                buildPayload(
-                  state,
-                  t(state, "Soft drink cup or bottled water?", "¿Vaso para refill o agua embotellada?"),
-                  false
-                )
-              )
-            );
+            results.push(toolResult(name, toolCallId, buildPayload(
+              state,
+              t(state, "Soft drink or bottled water?", "¿Refresco o agua embotellada?"),
+              false
+            )));
             break;
           }
 
-          results.push(
-            toolResult(
-              name,
-              toolCallId,
-              buildPayload(state, nextQuestion(state, state.currentItem))
-            )
-          );
+          results.push(toolResult(name, toolCallId, buildPayload(
+            state,
+            nextQuestion(state, state.currentItem)
+          )));
           break;
         }
 
@@ -1895,17 +1562,11 @@ app.post("/vapi/tools", async (req, res) => {
           const mods = parseMods(parameters.modifications || []);
 
           if (!mods.length) {
-            results.push(
-              toolResult(
-                name,
-                toolCallId,
-                buildPayload(
-                  state,
-                  t(state, "Tell me the change you want.", "Dime qué cambio quieres."),
-                  false
-                )
-              )
-            );
+            results.push(toolResult(name, toolCallId, buildPayload(
+              state,
+              t(state, "Tell me the change you want.", "Dime el cambio que quieres."),
+              false
+            )));
             break;
           }
 
@@ -1916,60 +1577,54 @@ app.post("/vapi/tools", async (req, res) => {
             state.currentItem.ingredientConfirmed = true;
           }
 
-          results.push(
-            toolResult(
-              name,
-              toolCallId,
-              buildPayload(state, nextQuestion(state, state.currentItem))
-            )
-          );
+          results.push(toolResult(name, toolCallId, buildPayload(
+            state,
+            nextQuestion(state, state.currentItem)
+          )));
+          break;
+        }
+
+        case "confirm_item_ingredients": {
+          if (!state.currentItem.pendingIngredientConfirmation) {
+            results.push(toolResult(name, toolCallId, buildPayload(
+              state,
+              nextQuestion(state, state.currentItem),
+              false
+            )));
+            break;
+          }
+
+          state.currentItem.pendingIngredientConfirmation = null;
+          state.currentItem.ingredientConfirmed = true;
+
+          results.push(toolResult(name, toolCallId, buildPayload(
+            state,
+            nextQuestion(state, state.currentItem)
+          )));
           break;
         }
 
         case "describe_item": {
           const itemType = parseItem(parameters.itemType || parameters.item || "");
-
           if (!itemType) {
-            results.push(
-              toolResult(
-                name,
-                toolCallId,
-                buildPayload(
-                  state,
-                  t(state, "Which item would you like me to explain?", "¿Qué item quieres que te explique?"),
-                  false
-                )
-              )
-            );
+            results.push(toolResult(name, toolCallId, buildPayload(
+              state,
+              t(state, "Which item would you like me to explain?", "¿Qué item quieres que te explique?"),
+              false
+            )));
             break;
           }
 
-          let speak = t(state, "I can explain that item.", "Puedo explicarte ese item.");
+          let speak = t(state, "I can explain that item.", "Te puedo explicar ese item.");
 
-          if (itemType === "flyin fries") {
+          if (itemType === "pork belly") {
             speak = t(
               state,
-              "The Flain Fries come with boneless, buffalo, ranch, and chipotle ranch on top.",
-              "Las Flain Fries llevan boneless, buffalo, ranch y chipotle ranch arriba."
+              "It is an order of pork belly, 6 pieces, with 1 sauce.",
+              "Es una orden de pork belly de 6 piezas con 1 salsa."
             );
-          } else if (itemType === "pork belly fries") {
-            speak = t(
-              state,
-              "The pork belly fries come with pork belly, ranch, green chile on top, onion, and cilantro.",
-              "Las pork belly fries llevan pork belly, ranch, green chile arriba, cebolla y cilantro."
-            );
-          } else if (itemType === "chicken parmesan fries") {
-            speak = t(
-              state,
-              "The chicken parmesan fries come with fried chicken breast, ranch, marinara, and parmesan on top.",
-              "Las chicken parmesan fries llevan pechuga de pollo frita, ranch, marinara y parmesan arriba."
-            );
-          } else if (itemType === "pork belly") {
-            speak = t(
-              state,
-              "The 6-piece pork belly includes 1 sauce, and it comes on top by default.",
-              "El pork belly de 6 piezas incluye 1 salsa y viene arriba por defecto."
-            );
+          } else if (itemType === "flyin fries" || itemType === "pork belly fries" || itemType === "chicken parmesan fries") {
+            speak = loadedFriesPrompt(state, itemType);
           }
 
           results.push(toolResult(name, toolCallId, buildPayload(state, speak)));
@@ -1978,59 +1633,41 @@ app.post("/vapi/tools", async (req, res) => {
 
         case "finalize_current_item": {
           if (!itemComplete(state.currentItem)) {
-            results.push(
-              toolResult(
-                name,
-                toolCallId,
-                buildPayload(state, nextQuestion(state, state.currentItem), false)
-              )
-            );
+            results.push(toolResult(name, toolCallId, buildPayload(
+              state,
+              nextQuestion(state, state.currentItem),
+              false
+            )));
             break;
           }
 
           state.items.push(JSON.parse(JSON.stringify(state.currentItem)));
           state.currentItem = blankItem();
 
-          results.push(
-            toolResult(
-              name,
-              toolCallId,
-              buildPayload(
-                state,
-                t(state, "Perfect. What would you like to add next?", "Perfecto. ¿Qué más te agrego?")
-              )
-            )
-          );
+          results.push(toolResult(name, toolCallId, buildPayload(
+            state,
+            t(state, "Perfect. What would you like to add next?", "Perfecto. ¿Qué más te agrego?")
+          )));
           break;
         }
 
         case "set_customer_name": {
           const customerName = String(parameters.customerName || "").trim();
-
           if (!customerName) {
-            results.push(
-              toolResult(
-                name,
-                toolCallId,
-                buildPayload(
-                  state,
-                  t(state, "What name should I put on the order?", "¿A nombre de quién pongo la orden?"),
-                  false
-                )
-              )
-            );
+            results.push(toolResult(name, toolCallId, buildPayload(
+              state,
+              t(state, "What name should I put on the order?", "¿A nombre de quién pongo la orden?"),
+              false
+            )));
             break;
           }
 
           state.customerName = customerName;
 
-          results.push(
-            toolResult(
-              name,
-              toolCallId,
-              buildPayload(state, t(state, "Got it.", "Listo."))
-            )
-          );
+          results.push(toolResult(name, toolCallId, buildPayload(
+            state,
+            t(state, "Got it.", "Listo.")
+          )));
           break;
         }
 
@@ -2060,51 +1697,33 @@ app.post("/vapi/tools", async (req, res) => {
 
           state.orderComplete = true;
 
-          results.push(
-            toolResult(
-              name,
-              toolCallId,
-              buildPayload(
-                state,
-                t(
-                  state,
-                  "Perfect, we’ll have that ready for pickup. See you soon.",
-                  "Perfecto, tendremos tu orden lista para recoger. Gracias."
-                )
-              )
+          results.push(toolResult(name, toolCallId, buildPayload(
+            state,
+            t(
+              state,
+              "Perfect, we’ll have that ready for pickup. See you soon.",
+              "Perfecto, tendremos tu orden lista para recoger. Gracias."
             )
-          );
+          )));
           break;
         }
 
         case "reset_current_item": {
           state.currentItem = blankItem();
 
-          results.push(
-            toolResult(
-              name,
-              toolCallId,
-              buildPayload(
-                state,
-                t(state, "Okay, let’s start that item again.", "Está bien, vamos a empezar ese item otra vez.")
-              )
-            )
-          );
+          results.push(toolResult(name, toolCallId, buildPayload(
+            state,
+            t(state, "Okay, let’s start that item again.", "Está bien, vamos a empezar ese item otra vez.")
+          )));
           break;
         }
 
         default: {
-          results.push(
-            toolResult(
-              name,
-              toolCallId,
-              buildPayload(
-                state,
-                t(state, "That backend tool is not configured yet.", "Esa herramienta del backend todavía no está configurada."),
-                false
-              )
-            )
-          );
+          results.push(toolResult(name, toolCallId, buildPayload(
+            state,
+            t(state, "That backend tool is not configured yet.", "Esa herramienta del backend todavía no está configurada."),
+            false
+          )));
         }
       }
     }
