@@ -1,104 +1,139 @@
-const express = require('express');
+import express from "express";
 const app = express();
 app.use(express.json());
 
-// --- THE COMPLETE MENU SOURCE OF TRUTH ---
+const PORT = process.env.PORT || 3000;
+const VAPI_WEBHOOK_SECRET = process.env.VAPI_WEBHOOK_SECRET;
+
+// State management for active calls
+const calls = new Map();
+
+/* -------------------------------------------------------------------------- */
+/* 1. THE COMPLETE MENU & POLICY ENGINE (The Library of Truth)               */
+/* -------------------------------------------------------------------------- */
 const MENU = {
-  wings_boneless: {
-    "6pc": { price: 9.75, sauces: 1, dips: 1, upsell: "8pc_combo" },
-    "9pc": { price: 14.50, sauces: 1, dips: 1, upsell: "8pc_combo" },
-    "12pc": { price: 18.50, sauces: 2, dips: 2 },
-    "18pc": { price: 27.50, sauces: 3, dips: 3 },
-    "24pc": { price: 36.50, sauces: 4, dips: 4 },
-    "48pc": { price: 72.00, sauces: 8, dips: 8 }
+  wings: {
+    prices: { 6: 9.75, 9: 14.50, 12: 18.50, 18: 27.50, 24: 36.50, 48: 72.00 },
+    sauce_slots: (q) => (q >= 12 ? Math.floor(q / 6) : 1),
+    dip_slots: (q) => (q >= 12 ? Math.floor(q / 6) : 1)
   },
-  combos: { 
-    "8pc_wings_boneless_combo": { price: 15.75, sauces: 1, dips: 1, sides: 1 },
-    "half_rack_ribs_combo": { price: 19.50, sauces: 1, sides: 1 },
-    "flyin_burger_combo": { price: 17.75, sides: 1, protein_req: true },
-    "classic_burger_combo": { price: 14.75, sides: 1 },
-    "buffalo_chicken_sandwich_combo": { price: 15.50, sides: 1, protein_req: true },
-    "chicken_sandwich_combo": { price: 14.50, sides: 1, protein_req: true },
-    "fish_chips_combo": { price: 16.50, sides: 1 },
-    "baked_potato_combo": { price: 16.50, protein_req: true, water_choice: true }
+  combos: {
+    "8pc_wings_combo": { price: 15.75, sauces: 1, dips: 1, side: true, drink: "auto" },
+    "8pc_boneless_combo": { price: 15.75, sauces: 1, dips: 1, side: true, drink: "auto" },
+    "half_rack_combo": { price: 19.50, sauces: 1, side: true, drink: "auto" },
+    "flyin_burger_combo": { price: 17.75, side: true, protein_req: true, drink: "auto" },
+    "classic_burger_combo": { price: 14.75, side: true, drink: "auto" },
+    "buffalo_chicken_sandwich_combo": { price: 15.50, side: true, protein_req: true, drink: "auto" },
+    "chicken_sandwich_combo": { price: 14.50, side: true, protein_req: true, drink: "auto" },
+    "fish_chips_combo": { price: 16.50, side: true, drink: "auto" },
+    "baked_potato_combo": { price: 16.50, protein_req: true, side: "fixed", drink_choice: true }
   },
   specialties: {
     "pork_belly_6pc": { price: 11.50, sauces: 1 },
-    "flyin_fries": { price: 15.75 },
+    "flyin_fries": { price: 15.75 }, // Junior order
     "pork_belly_fries": { price: 15.75 },
-    "sampler_platter": { price: 22.50, corn_rib_sauce_req: 1 },
-    "house_salad": { price: 10.50 },
-    "flyin_salad": { price: 15.50, protein_req: true }
+    "sampler_platter": { price: 22.50, corn_rib_sauce: 1 },
+    "house_salad": { price: 10.50, dressing: 1 },
+    "flyin_salad": { price: 15.50, dressing: 1, protein_req: true }
   },
   sides: {
-    "regular_fries": 4.50,
-    "sweet_potato_fries": 5.75,
-    "tostones": 5.75,
-    "yuca_fries": 5.75,
-    "buffalo_ranch_fries": 8.50,
-    "corn_ribs_4pc": 8.50,
-    "mac_bites_6pc": 8.50,
-    "mozzarella_sticks_6pc": 8.50,
-    "onion_rings": 7.50,
-    "potato_salad": 4.50
+    "regular_fries": 4.50, "sweet_potato_fries": 5.75, "tostones": 5.75, "yuca_fries": 5.75,
+    "buffalo_ranch_fries": 8.50, "corn_ribs_4pc": 8.50, "mac_bites_6pc": 8.50,
+    "mozzarella_sticks_6pc": 8.50, "onion_rings": 7.50, "potato_salad": 4.50
+  },
+  sauces: [
+    "al pastor", "barbeque", "barbeque chiltepin", "chorizo", "chocolate chiltepin",
+    "cinnamon roll", "citrus chipotle", "garlic parmesan", "green chile", "hot",
+    "lime pepper", "mild", "mango habanero", "pizza", "teriyaki"
+  ],
+  policies: {
+    extra_sauce_price: 0.75,
+    flats_drums_extra: 1.50,
+    payment_threshold: 50.00,
+    pickup_only: true,
+    no_alcohol_phone: true
   }
 };
 
-let currentTotal = 0;
+/* -------------------------------------------------------------------------- */
+/* 2. DEFENSIVE UTILITIES (Crash Prevention)                                  */
+/* -------------------------------------------------------------------------- */
+function normalize(text = "") {
+  return String(text).toLowerCase().trim();
+}
 
-app.post('/vapi/tools', (req, res) => {
+function getCallState(callId) {
+  if (!calls.has(callId)) {
+    calls.set(callId, {
+      language: "en",
+      order: [],
+      total: 0,
+      currentItem: { id: null, qty: null, sauces: [], dips: [], side: null, protein: null, upsell_offered: false }
+    });
+  }
+  return calls.get(callId);
+}
+
+const t = (state, en, es) => (state.language === "es" ? es : en);
+
+/* -------------------------------------------------------------------------- */
+/* 3. THE LOGIC ENGINE                                                       */
+/* -------------------------------------------------------------------------- */
+app.post("/vapi/tools", async (req, res) => {
   try {
-    const toolCalls = req.body.message?.toolCalls;
-    if (!toolCalls || toolCalls.length === 0) {
-      return res.status(200).json({ results: [] });
-    }
+    const toolCalls = req.body?.message?.toolCalls;
+    if (!toolCalls) return res.status(200).json({ results: [] });
 
-    const results = toolCalls.map(call => {
+    const callId = req.body.message.call?.id || "default";
+    const state = getCallState(callId);
+    const results = [];
+
+    for (const call of toolCalls) {
       const { name, arguments: args, id } = call;
 
       if (name === "add_item") {
-        const itemId = args.item_id;
-        const item = MENU.wings_boneless[itemId] || MENU.combos[itemId] || MENU.specialties[itemId] || MENU.sides[itemId];
-
-        if (!item) {
-          return { toolCallId: id, result: "Item not found. Please ask for clarification." };
+        const itemId = args?.item_id;
+        if (!itemId) {
+          results.push({ toolCallId: id, result: JSON.stringify({ ok: false, speak: t(state, "What can I add for you?", "¿Qué te agrego?") }) });
+          continue;
         }
 
-        // --- ENFORCEMENT RULES ---
-        if ((itemId === "6pc" || itemId === "9pc") && !args.upsell_checked) {
-          return { toolCallId: id, result: "INSTRUCTION: Stop. Offer the 8pc combo with fries and a drink first." };
-        }
-        if (item.protein_req && !args.protein_style) {
-          return { toolCallId: id, result: "INSTRUCTION: Stop. Ask if they want it Grilled or Fried." };
-        }
-        if (MENU.combos[itemId] && !args.side_choice) {
-          return { toolCallId: id, result: "INSTRUCTION: Stop. Ask for the side: Fries, Sweet Potato Fries, Tostones, Yuca, or Potato Salad." };
-        }
-        if (item.sauces > 0 && !args.sauce) {
-          return { toolCallId: id, result: "INSTRUCTION: Stop. Ask which sauce they want for this item." };
+        // Logic: Identify Item & Check Requirements
+        const isCombo = MENU.combos[itemId];
+        const isWings = itemId.includes("wing") || itemId.includes("boneless");
+        
+        // 1. UPSELL CHECK (6/9 Wings)
+        if ((itemId === "6pc" || itemId === "9pc") && !state.currentItem.upsell_offered) {
+          state.currentItem.upsell_offered = true;
+          results.push({ toolCallId: id, result: JSON.stringify({ ok: false, speak: t(state, "Would you like to make that an 8-piece combo with fries and a drink instead?", "¿Gusta hacerlo combo de 8 piezas con papas y refresco?") }) });
+          continue;
         }
 
-        // --- CALCULATION ---
-        const itemPrice = item.price || item;
-        currentTotal += itemPrice;
-
-        let feedback = `${itemId} added. Current total is $${currentTotal.toFixed(2)}.`;
-        if (currentTotal >= 50) {
-          feedback += " NOTICE: Total exceeds $50. Phone payment required.";
+        // 2. MISSING DATA CHECKS
+        if (isCombo && !args.side_choice) {
+          results.push({ toolCallId: id, result: JSON.stringify({ ok: false, speak: t(state, "Which side would you like? We have fries, sweet potato fries, tostones, yuca, or potato salad.", "¿Qué acompañamiento gustas? Tenemos papas, papas de camote, tostones, yuca o ensalada de papa.") }) });
+          continue;
         }
 
-        return { toolCallId: id, result: feedback };
+        // 3. FINALIZE ITEM
+        const basePrice = isCombo ? MENU.combos[itemId].price : (MENU.wings.prices[parseInt(itemId)] || 0);
+        state.order.push({ id: itemId, price: basePrice });
+        state.total += basePrice;
+
+        let feedback = t(state, `Added ${itemId}. Total is $${state.total.toFixed(2)}.`, `Agregué ${itemId}. El total es $${state.total.toFixed(2)}.`);
+        
+        if (state.total >= MENU.policies.payment_threshold) {
+          feedback += " " + t(state, "Since we are over $50, I'll need to take payment over the phone.", "Como pasamos de $50, tomaré tu pago por teléfono.");
+        }
+
+        results.push({ toolCallId: id, result: JSON.stringify({ ok: true, speak: feedback }) });
       }
-      
-      return { toolCallId: id, result: "Function not recognized." };
-    });
-
+    }
     return res.status(200).json(results);
   } catch (err) {
-    console.error(err);
-    return res.status(500).send("Server Error");
+    console.error("CRITICAL ERROR:", err);
+    return res.status(200).json({ results: [{ result: "Error" }] });
   }
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server listening on port ${PORT}`));
+app.listen(PORT, () => console.log(`Master Engine Live on ${PORT}`));
