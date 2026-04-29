@@ -1,28 +1,28 @@
 // ===============================
 // FLAPS & RACKS AI CASHIER BACKEND V1.0
+// ES MODULE VERSION FOR RAILWAY
 // ===============================
 
-const express = require("express");
-const bodyParser = require("body-parser");
+import express from "express";
 
 const app = express();
-app.use(bodyParser.json());
+app.use(express.json());
 
 // ===============================
-// MENU DATA (CORE TRUTH)
+// MENU DATA
 // ===============================
 
 const MENU = {
   wings: {
     sizes: [6, 9, 12, 18, 24, 48],
-    sauceLimit: { 6:1, 9:1, 12:2, 18:3, 24:4, 48:8 },
-    dipLimit: { 6:1, 9:1, 12:2, 18:3, 24:4, 48:8 }
+    sauceLimit: { 6: 1, 9: 1, 12: 2, 18: 3, 24: 4, 48: 8 },
+    dipLimit: { 6: 1, 9: 1, 12: 2, 18: 3, 24: 4, 48: 8 }
   },
 
   boneless: {
     sizes: [6, 9, 12, 18, 24, 48],
-    sauceLimit: { 6:1, 9:1, 12:2, 18:3, 24:4, 48:8 },
-    dipLimit: { 6:1, 9:1, 12:2, 18:3, 24:4, 48:8 }
+    sauceLimit: { 6: 1, 9: 1, 12: 2, 18: 3, 24: 4, 48: 8 },
+    dipLimit: { 6: 1, 9: 1, 12: 2, 18: 3, 24: 4, 48: 8 }
   },
 
   sauces: [
@@ -57,49 +57,76 @@ const MENU = {
 };
 
 // ===============================
+// NORMALIZATION
+// ===============================
+
+function normalizeText(value = "") {
+  return String(value).trim().toLowerCase();
+}
+
+function normalizeSauce(value = "") {
+  const sauce = normalizeText(value);
+
+  const aliases = {
+    "bbq": "barbeque",
+    "barbecue": "barbeque",
+    "barbeque": "barbeque",
+    "buffalo mild": "mild",
+    "buffalo hot": "hot",
+    "lemon pepper": "lemon pepper",
+    "lime pepper": "lime pepper"
+  };
+
+  return aliases[sauce] || sauce;
+}
+
+// ===============================
 // VALIDATOR ENGINE
 // ===============================
 
-function validateOrder(item) {
-  let errors = [];
+function validateOrder(item = {}) {
+  const errors = [];
 
-  // Wings / Boneless validation
-  if (item.type === "wings" || item.type === "boneless") {
-    const { quantity, sauces = [], dips = [] } = item;
+  const type = normalizeText(item.type);
+  const quantity = Number(item.quantity);
+  const sauces = Array.isArray(item.sauces) ? item.sauces.map(normalizeSauce) : [];
+  const dips = Array.isArray(item.dips) ? item.dips.map(normalizeText) : [];
 
-    if (!MENU.wings.sizes.includes(quantity)) {
-      errors.push("Invalid quantity");
+  if (sauces.includes("lemon pepper")) {
+    return {
+      valid: false,
+      correctionRequired: true,
+      message: "We have that as lime pepper. Is that okay?"
+    };
+  }
+
+  if (type === "wings" || type === "classic_wings" || type === "boneless") {
+    const rules = type === "boneless" ? MENU.boneless : MENU.wings;
+
+    if (!rules.sizes.includes(quantity)) {
+      errors.push("That quantity is not available. Available sizes are 6, 9, 12, 18, 24, and 48.");
     }
 
-    const maxSauces = MENU.wings.sauceLimit[quantity];
-    const maxDips = MENU.wings.dipLimit[quantity];
+    const maxSauces = rules.sauceLimit[quantity];
+    const maxDips = rules.dipLimit[quantity];
 
-    if (sauces.length > maxSauces) {
-      errors.push(`Too many sauces. Max allowed: ${maxSauces}`);
+    if (maxSauces && sauces.length > maxSauces) {
+      errors.push(`That order includes up to ${maxSauces} sauce${maxSauces > 1 ? "s" : ""}.`);
     }
 
-    if (dips.length > maxDips) {
-      errors.push(`Too many dips. Max allowed: ${maxDips}`);
+    if (maxDips && dips.length > maxDips) {
+      errors.push(`That order includes up to ${maxDips} dip${maxDips > 1 ? "s" : ""}.`);
     }
 
     if ((quantity === 6 || quantity === 9) && sauces.length > 1) {
-      errors.push("Cannot split sauces for 6 or 9 wings");
+      errors.push("For 6 or 9 wings, we can only do one sauce. We can mix two sauces together for an extra sauce charge, but we cannot split them.");
     }
-  }
-
-  // Lemon pepper correction
-  if (item.sauces) {
-    item.sauces = item.sauces.map(s => {
-      if (s === "lemon pepper") {
-        throw new Error("We have that as lime pepper. Is that okay?");
-      }
-      return s;
-    });
   }
 
   return {
     valid: errors.length === 0,
-    errors
+    errors,
+    message: errors[0] || "Valid order item."
   };
 }
 
@@ -107,68 +134,79 @@ function validateOrder(item) {
 // APPLY MENU RULES
 // ===============================
 
-function applyMenuRules(item) {
+function applyMenuRules(item = {}) {
+  const type = normalizeText(item.type);
+  const finalItem = { ...item };
 
-  // Default: sauce mixed
-  if (!item.saucePlacement) {
-    item.saucePlacement = "mixed";
+  if (!finalItem.saucePlacement) {
+    finalItem.saucePlacement = "mixed";
   }
 
-  // Buffalo Burger Combo rule
-  if (item.type === "buffalo_burger_combo") {
-    item.modifications = [
-      { remove: "mayo" },
-      { add: "ranch", price: 0 },
-      { add: "buffalo sauce", price: 0.75 }
+  if (type === "buffalo_burger_combo") {
+    finalItem.baseItem = "classic_burger_combo";
+    finalItem.modifications = [
+      { action: "remove", item: "mayo", price: 0 },
+      { action: "add", item: "ranch", price: 0 },
+      { action: "add", item: "buffalo sauce", price: 0.75 }
     ];
-
-    item.kitchenNote = "Sub ranch for mayo + buffalo sauce side charge";
+    finalItem.kitchenNote = "Sub ranch for mayo + buffalo sauce side charge";
   }
 
-  return item;
+  return finalItem;
 }
 
 // ===============================
-// MAIN TOOL HANDLER (VAPI)
+// ROUTES
 // ===============================
+
+app.get("/", (req, res) => {
+  res.json({
+    status: "ok",
+    service: "Flaps & Racks AI Cashier Backend",
+    version: "1.0-esm"
+  });
+});
+
+app.get("/health", (req, res) => {
+  res.json({ ok: true });
+});
 
 app.post("/order", (req, res) => {
   try {
-    let item = req.body;
+    const item = req.body || {};
 
-    // Validate
     const validation = validateOrder(item);
 
     if (!validation.valid) {
       return res.json({
         success: false,
-        message: validation.errors[0]
+        message: validation.message || validation.errors?.[0] || "Invalid order item.",
+        errors: validation.errors || []
       });
     }
 
-    // Apply rules
     const finalItem = applyMenuRules(item);
 
     return res.json({
       success: true,
       item: finalItem,
-      message: "Item added successfully"
+      message: "Item added successfully."
     });
 
   } catch (error) {
-    return res.json({
+    return res.status(500).json({
       success: false,
-      message: error.message || "Unexpected error"
+      message: error.message || "Unexpected server error."
     });
   }
 });
 
 // ===============================
-// SERVER START
+// START SERVER
 // ===============================
 
 const PORT = process.env.PORT || 3000;
 
-app.listen(PORT, () => {
-  console.log(`AI Cashier running on port ${PORT}`);
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`Flaps & Racks AI Cashier backend running on port ${PORT}`);
 });
