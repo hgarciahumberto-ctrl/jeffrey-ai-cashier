@@ -1,214 +1,663 @@
-import express from "express";
-const app = express();
-app.use(express.json());
-
-const PORT = process.env.PORT || 3000;
-const VAPI_WEBHOOK_SECRET = process.env.VAPI_WEBHOOK_SECRET;
-
-const calls = new Map();
-
-/* -------------------------------------------------------------------------- */
-/* 1. MASTER MENU & RULES (THE SOURCE OF TRUTH)                              */
-/* -------------------------------------------------------------------------- */
-
-const MASTER_MENU = {
-  // TRADITIONAL WINGS & BONELESS
-  wings: {
-    prices: { 6: 9.75, 9: 14.50, 12: 18.50, 18: 27.50, 24: 36.50, 48: 72.00 },
-    getRequiredSauces: (q) => (q >= 12 ? Math.floor(q / 6) : 1),
-    getRequiredDips: (q) => (q >= 12 ? Math.floor(q / 6) : 1),
-    upsell_to: "8pc_wings_combo"
+{
+  "version": "MENU_DATA_V1.2",
+  "status": "Foundation database - owner-confirmed validator-ready version",
+  "source_truth": "Menu board photo + training docs + Blueprint 5.3 + Vapi prompt + project memory",
+  "global_rules": {
+    "pickup_only": true,
+    "no_alcohol_phone_sales": true,
+    "orders_over_50_require_payment": true,
+    "id_required_for_prepaid_pickup": true,
+    "default_order_type": "to-go",
+    "one_item_at_a_time": true,
+    "ask_next_missing_detail_only": true,
+    "full_recap_only_at_end": true,
+    "ask_customer_name_near_end": true,
+    "final_upsell_once_near_end": true,
+    "do_not_ask_drink_flavor_for_regular_combos": true,
+    "lemon_pepper_correction": "Correct to lime pepper and wait for confirmation",
+    "extra_sauce_price": 0.75,
+    "all_items_allow_no_sauce": true,
+    "all_items_allow_sauce_on_side": true,
+    "combo_buffalo_ranch_fries_upgrade_price": 1.5,
+    "flavor_of_month_rule": "Flavor of the Month changes monthly and is treated as any other sauce while active. Pending owner list.",
+    "preferred_spanish_half_rack": "medio rack",
+    "extra_dip_price": 0.75,
+    "all_extra_sauces_same_price": true,
+    "dip_vs_drizzle_rule": "Dips are countable cups. Drizzles included on loaded items are not counted as side dips.",
+    "kids_wings_active": true,
+    "kids_boneless_active": true,
+    "normalize_sauce_names": true
   },
-  // COMBOS (INCLUDES FRIES + AUTO-DRINK)
-  combos: {
-    "8pc_wings_combo": { price: 15.75, sauces: 1, dips: 1, side: true, drink: "auto" },
-    "8pc_boneless_combo": { price: 15.75, sauces: 1, dips: 1, side: true, drink: "auto" },
-    "half_rack_combo": { price: 19.50, sauces: 1, side: true },
-    "flyin_burger_combo": { price: 17.75, protein: ["grilled", "fried"], side: true },
-    "classic_burger_combo": { price: 14.75, side: true },
-    "buffalo_chicken_sandwich_combo": { price: 15.50, protein: ["grilled", "fried"], side: true },
-    "chicken_sandwich_combo": { price: 14.50, protein: ["grilled", "fried"], side: true },
-    "fish_chips_combo": { price: 16.50, side: true },
-    "baked_potato_combo": { price: 16.50, protein: ["grilled", "fried", "steak", "pork belly"], drink: "choice" }
-  },
-  // SPECIALTIES & SIDES
-  specialties: {
-    "pork_belly_6pc": { price: 11.50, sauces: 1 },
-    "flyin_fries": { price: 15.75, components: ["boneless", "ranch", "chipotle ranch", "buffalo drizzle"] },
-    "pork_belly_fries": { price: 15.75, components: ["pork belly", "ranch", "green chile", "onion", "cilantro"] },
-    "sampler_platter": { price: 22.50, corn_rib_sauce: 1 }
-  },
-  sides_standalone: {
-    "regular_fries": 4.50, "sweet_potato_fries": 5.75, "tostones": 5.75, "yuca_fries": 5.75,
-    "buffalo_ranch_fries": 8.50, "corn_ribs": 8.50, "mac_bites": 8.50, "mozzarella_sticks": 8.50
-  }
-};
-
-/* -------------------------------------------------------------------------- */
-/* 2. ALIAS & NORMALIZATION ENGINE (SPANGLISH SUPPORT)                       */
-/* -------------------------------------------------------------------------- */
-
-const ALIASES = {
-  // Sauces / Accents
-  "lemon pepper": "lime pepper", "laim pepper": "lime pepper", "barbacua": "barbeque", "barbeque chiltepin": "barbeque chiltepin",
-  // Items
-  "alitas": "wings", "tradicionales": "wings", "boneles": "boneless", "hamburguesa": "classic_burger_combo",
-  "papas": "regular_fries", "papas de camote": "sweet_potato_fries", "medio rack": "half_rack_combo", "media raca": "half_rack_combo",
-  "flain frais": "flyin_fries", "papas flain": "flyin_fries", "pork beli": "pork_belly_6pc"
-  // [The 1500-line version would continue this for all 400+ variations]
-};
-
-function normalize(text = "") {
-  return String(text).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9\s]/g, "").trim();
-}
-
-/* -------------------------------------------------------------------------- */
-/* 3. STATE MACHINE HELPER                                                   */
-/* -------------------------------------------------------------------------- */
-
-function blankItem() {
-  return { 
-    id: null, 
-    qty: null, 
-    sauces: [], 
-    dips: [], 
-    side: null, 
-    protein: null, 
-    is_upsell_pitched: false,
-    status: "PENDING" // PENDING | VALIDATED | ADDED
-  };
-}
-
-function getCallState(callId) {
-  if (!calls.has(callId)) {
-    calls.set(callId, {
-      language: "en",
-      order: [],
-      total: 0,
-      currentItem: blankItem(),
-      threshold_notified: false
-    });
-  }
-  return calls.get(callId);
-}
-/* -------------------------------------------------------------------------- */
-/* 4. VALIDATION ENGINE (SLOT-FILLING LOGIC)                                  */
-/* -------------------------------------------------------------------------- */
-
-function validateItem(state, parameters) {
-  const itemId = ALIASES[normalize(parameters.item_id)] || normalize(parameters.item_id);
-  const current = state.currentItem;
-  
-  // Find item config in MASTER_MENU
-  let config = MASTER_MENU.combos[itemId] || MASTER_MENU.specialties[itemId];
-  let isWings = false;
-
-  if (!config && (itemId.includes("wing") || itemId.includes("boneless"))) {
-    isWings = true;
-    config = MASTER_MENU.wings;
-    current.qty = parseInt(itemId) || 6;
-  }
-
-  if (!config) return { ok: false, speak: t(state, "I couldn't find that item. Can you repeat it?", "No encontré ese item. ¿Me lo repites?") };
-
-  // A. UPSELL LOGIC (Phase 1)
-  if (isWings && (current.qty === 6 || current.qty === 9) && !current.is_upsell_pitched) {
-    current.is_upsell_pitched = true;
-    return { ok: false, speak: t(state, "Would you like to make that an 8-piece combo with fries and a drink?", "¿Gusta hacerlo combo de 8 piezas con papas y refresco?") };
-  }
-
-  // B. PROTEIN VALIDATION (For Burgers/Sandwiches/Salads)
-  if (config.protein && !parameters.protein_style) {
-    return { ok: false, speak: t(state, "Would you like the chicken grilled or fried?", "¿Gusta el pollo asado o frito?") };
-  }
-
-  // C. SAUCE VALIDATION (Recursive Slot Filling)
-  const reqSauces = isWings ? config.getRequiredSauces(current.qty) : (config.sauces || 0);
-  const providedSauces = parameters.sauce ? (Array.isArray(parameters.sauce) ? parameters.sauce : [parameters.sauce]) : [];
-  
-  if (providedSauces.length < reqSauces) {
-    return { ok: false, speak: t(state, `Which sauce would you like for the ${itemId}?`, `¿Qué salsa gusta para las ${itemId}?`) };
-  }
-
-  // D. SIDE VALIDATION (For Combos)
-  if (config.side && !parameters.side_choice) {
-    return { ok: false, speak: t(state, "Which side? Fries, sweet potato fries, tostones, yuca, or potato salad?", "¿Qué acompañamiento? Papas, papas de camote, tostones, yuca o ensalada de papa.") };
-  }
-
-  // E. DRINK VALIDATION (Baked Potato Specific)
-  if (config.drink === "choice" && !parameters.drink_choice) {
-    return { ok: false, speak: t(state, "Would you like a soft drink or bottled water?", "¿Gusta refresco o agua embotellada?") };
-  }
-
-  // ALL SLOTS FILLED -> CALCULATE PRICE
-  const price = isWings ? config.prices[current.qty] : config.price;
-  return { ok: true, itemId, price };
-}
-
-/* -------------------------------------------------------------------------- */
-/* 5. VAPI WEBHOOK HANDLER (THE "BRAIN")                                      */
-/* -------------------------------------------------------------------------- */
-
-app.post("/vapi/tools", async (req, res) => {
-  try {
-    const message = req.body?.message;
-    if (!message || message.type !== "tool-calls") return res.status(200).json({ results: [] });
-
-    const callId = message.call?.id || "default";
-    const state = getCallState(callId);
-    const results = [];
-
-    for (const toolCall of message.toolCallList || []) {
-      const { name, parameters, id: toolCallId } = toolCall;
-      const args = parameters || {};
-
-      // Language Sync
-      if (args.transcript) {
-        const input = normalize(args.transcript);
-        if (["hola", "espanol", "quiero", "alitas"].some(w => input.includes(w))) state.language = "es";
-      }
-
-      switch (name) {
-        case "add_item": {
-          const validation = validateItem(state, args);
-
-          if (!validation.ok) {
-            results.push({ toolCallId, result: JSON.stringify({ ok: false, speak: validation.speak }) });
-          } else {
-            // Commit to order
-            state.order.push({ id: validation.itemId, price: validation.price });
-            state.total += validation.price;
-            state.currentItem = blankItem(); // Clear slots for next item
-
-            let feedback = t(state, `Added ${validation.itemId}. Total: $${state.total.toFixed(2)}.`, `Agregué ${validation.itemId}. Total: $${state.total.toFixed(2)}.`);
-            
-            // Threshold Check
-            if (state.total >= 50 && !state.threshold_notified) {
-              state.threshold_notified = true;
-              feedback += " " + t(state, "Note: Orders over $50 require phone payment.", "Nota: Pedidos de más de $50 requieren pago por teléfono.");
-            }
-
-            results.push({ toolCallId, result: JSON.stringify({ ok: true, speak: feedback }) });
-          }
-          break;
-        }
-
-        case "finalize_order": {
-          const summary = state.order.map(i => i.id).join(", ");
-          const finalMsg = t(state, 
-            `Your order of ${summary} comes to $${state.total.toFixed(2)}. Can I get a name for the order?`, 
-            `Tu orden de ${summary} es un total de $${state.total.toFixed(2)}. ¿A qué nombre queda la orden?`
-          );
-          results.push({ toolCallId, result: JSON.stringify({ ok: true, speak: finalMsg }) });
-          break;
-        }
-      }
+  "sauces": [
+    "Al Pastor",
+    "Barbeque",
+    "Barbeque Chiltepin",
+    "Chorizo",
+    "Chocolate Chiltepin",
+    "Cinnamon Roll",
+    "Citrus Chipotle",
+    "Garlic Parmesan",
+    "Green Chile",
+    "Hot / Buffalo Hot",
+    "Lime Pepper",
+    "Mild / Buffalo Mild",
+    "Mango Habanero",
+    "Pizza",
+    "Teriyaki",
+    "Flavor of the Month"
+  ],
+  "dips": [
+    "Ranch",
+    "Blue Cheese",
+    "Chipotle Ranch",
+    "Jalape\u00f1o Ranch"
+  ],
+  "items": [
+    {
+      "id": "classic_wings_6",
+      "name": "Classic Wings 6",
+      "category": "classic_wings",
+      "price": 10.1,
+      "required_slots": "1 sauce(s), 1 dip(s)",
+      "rules": "Sauce mixed by default; sauce on side/no sauce allowed. For 6/9, no split sauce.",
+      "included_components": "",
+      "spanish_terms": "",
+      "pronunciation": ""
+    },
+    {
+      "id": "classic_wings_9",
+      "name": "Classic Wings 9",
+      "category": "classic_wings",
+      "price": 14.2,
+      "required_slots": "1 sauce(s), 1 dip(s)",
+      "rules": "Sauce mixed by default; sauce on side/no sauce allowed. For 6/9, no split sauce.",
+      "included_components": "",
+      "spanish_terms": "",
+      "pronunciation": ""
+    },
+    {
+      "id": "classic_wings_12",
+      "name": "Classic Wings 12",
+      "category": "classic_wings",
+      "price": 18.3,
+      "required_slots": "2 sauce(s), 2 dip(s)",
+      "rules": "Sauce mixed by default; sauce on side/no sauce allowed. For 6/9, no split sauce.",
+      "included_components": "",
+      "spanish_terms": "",
+      "pronunciation": ""
+    },
+    {
+      "id": "classic_wings_18",
+      "name": "Classic Wings 18",
+      "category": "classic_wings",
+      "price": 23.65,
+      "required_slots": "3 sauce(s), 3 dip(s)",
+      "rules": "Sauce mixed by default; sauce on side/no sauce allowed. For 6/9, no split sauce.",
+      "included_components": "",
+      "spanish_terms": "",
+      "pronunciation": ""
+    },
+    {
+      "id": "classic_wings_24",
+      "name": "Classic Wings 24",
+      "category": "classic_wings",
+      "price": 30.65,
+      "required_slots": "4 sauce(s), 4 dip(s)",
+      "rules": "Sauce mixed by default; sauce on side/no sauce allowed. For 6/9, no split sauce.",
+      "included_components": "",
+      "spanish_terms": "",
+      "pronunciation": ""
+    },
+    {
+      "id": "classic_wings_48",
+      "name": "Classic Wings 48",
+      "category": "classic_wings",
+      "price": 58.5,
+      "required_slots": "8 sauce(s), 8 dip(s)",
+      "rules": "Sauce mixed by default; sauce on side/no sauce allowed. For 6/9, no split sauce.",
+      "included_components": "",
+      "spanish_terms": "",
+      "pronunciation": ""
+    },
+    {
+      "id": "boneless_6",
+      "name": "Boneless 6",
+      "category": "boneless",
+      "price": 9.05,
+      "required_slots": "1 sauce(s), 1 dip(s)",
+      "rules": "Sauce mixed by default; sauce on side allowed. No-sauce needs confirmation.",
+      "included_components": "",
+      "spanish_terms": "",
+      "pronunciation": ""
+    },
+    {
+      "id": "boneless_9",
+      "name": "Boneless 9",
+      "category": "boneless",
+      "price": 13.35,
+      "required_slots": "1 sauce(s), 1 dip(s)",
+      "rules": "Sauce mixed by default; sauce on side allowed. No-sauce needs confirmation.",
+      "included_components": "",
+      "spanish_terms": "",
+      "pronunciation": ""
+    },
+    {
+      "id": "boneless_12",
+      "name": "Boneless 12",
+      "category": "boneless",
+      "price": 16.45,
+      "required_slots": "2 sauce(s), 2 dip(s)",
+      "rules": "Sauce mixed by default; sauce on side allowed. No-sauce needs confirmation.",
+      "included_components": "",
+      "spanish_terms": "",
+      "pronunciation": ""
+    },
+    {
+      "id": "boneless_18",
+      "name": "Boneless 18",
+      "category": "boneless",
+      "price": 22.65,
+      "required_slots": "3 sauce(s), 3 dip(s)",
+      "rules": "Sauce mixed by default; sauce on side allowed. No-sauce needs confirmation.",
+      "included_components": "",
+      "spanish_terms": "",
+      "pronunciation": ""
+    },
+    {
+      "id": "boneless_24",
+      "name": "Boneless 24",
+      "category": "boneless",
+      "price": 28.85,
+      "required_slots": "4 sauce(s), 4 dip(s)",
+      "rules": "Sauce mixed by default; sauce on side allowed. No-sauce needs confirmation.",
+      "included_components": "",
+      "spanish_terms": "",
+      "pronunciation": ""
+    },
+    {
+      "id": "boneless_48",
+      "name": "Boneless 48",
+      "category": "boneless",
+      "price": 56.85,
+      "required_slots": "8 sauce(s), 8 dip(s)",
+      "rules": "Sauce mixed by default; sauce on side allowed. No-sauce needs confirmation.",
+      "included_components": "",
+      "spanish_terms": "",
+      "pronunciation": ""
+    },
+    {
+      "id": "house_salad",
+      "name": "House Salad",
+      "category": "menu_item",
+      "price": "$7.70",
+      "required_slots": "dressing",
+      "rules": "Do not explain ingredients unless asked.",
+      "included_components": "",
+      "spanish_terms": "",
+      "pronunciation": ""
+    },
+    {
+      "id": "flyin_salad",
+      "name": "Flyin\u2019 Salad",
+      "category": "menu_item",
+      "price": "$11.30",
+      "required_slots": "chicken style, dressing",
+      "rules": "Ask grilled or fried chicken.",
+      "included_components": "",
+      "spanish_terms": "",
+      "pronunciation": ""
+    },
+    {
+      "id": "flyin_fries__junior",
+      "name": "Flyin\u2019 Fries / Junior",
+      "category": "menu_item",
+      "price": "$9.85",
+      "required_slots": "ingredient confirmation",
+      "rules": "Fries, boneless, ranch, chipotle ranch, buffalo drizzle. Do not ask sauce by default.",
+      "included_components": "",
+      "spanish_terms": "",
+      "pronunciation": ""
+    },
+    {
+      "id": "pork_belly_fries",
+      "name": "Pork Belly Fries",
+      "category": "menu_item",
+      "price": "$12.25",
+      "required_slots": "ingredient confirmation",
+      "rules": "Fries, pork belly, ranch, green chile, onion, cilantro.",
+      "included_components": "",
+      "spanish_terms": "",
+      "pronunciation": ""
+    },
+    {
+      "id": "chicken_parmesan_fries",
+      "name": "Chicken Parmesan Fries",
+      "category": "menu_item",
+      "price": "$12.25",
+      "required_slots": "ingredient confirmation",
+      "rules": "Fries, fried chicken breast, ranch, marinara, parmesan.",
+      "included_components": "",
+      "spanish_terms": "",
+      "pronunciation": ""
+    },
+    {
+      "id": "pork_belly_6_piece",
+      "name": "Pork Belly 6 Piece",
+      "category": "menu_item",
+      "price": "$13.25",
+      "required_slots": "sauce",
+      "rules": "No default sauce. Ask sauce. Popular: Green Chile, Barbeque Chiltepin.",
+      "included_components": "",
+      "spanish_terms": "",
+      "pronunciation": ""
+    },
+    {
+      "id": "korean_style_ribs_12_rack",
+      "name": "Korean Style Ribs 1/2 Rack",
+      "category": "menu_item",
+      "price": "$13.25",
+      "required_slots": "sauce",
+      "rules": "1 sauce. Offer combo before sauce.",
+      "included_components": "",
+      "spanish_terms": "",
+      "pronunciation": ""
+    },
+    {
+      "id": "korean_style_ribs_full_rack",
+      "name": "Korean Style Ribs Full Rack",
+      "category": "menu_item",
+      "price": "$20.99",
+      "required_slots": "sauce(s)",
+      "rules": "Up to 2 sauces.",
+      "included_components": "",
+      "spanish_terms": "",
+      "pronunciation": ""
+    },
+    {
+      "id": "flyin_baked_potato_combo_-_chicken",
+      "name": "Flyin\u2019 Baked Potato Combo - Chicken",
+      "category": "menu_item",
+      "price": "$10.89",
+      "required_slots": "chicken style, sauce, drizzle, top/side, drink",
+      "rules": "Valid protein. Choice of soft drink or bottled water.",
+      "included_components": "",
+      "spanish_terms": "",
+      "pronunciation": ""
+    },
+    {
+      "id": "flyin_baked_potato_combo_-_steak",
+      "name": "Flyin\u2019 Baked Potato Combo - Steak",
+      "category": "menu_item",
+      "price": "$12.95",
+      "required_slots": "sauce, drizzle, top/side, drink",
+      "rules": "Steak is valid. Spanish: carne asada.",
+      "included_components": "",
+      "spanish_terms": "",
+      "pronunciation": ""
+    },
+    {
+      "id": "flyin_baked_potato_combo_-_pork_belly",
+      "name": "Flyin\u2019 Baked Potato Combo - Pork Belly",
+      "category": "menu_item",
+      "price": "$12.95",
+      "required_slots": "sauce, drizzle, top/side, drink",
+      "rules": "Valid protein.",
+      "included_components": "",
+      "spanish_terms": "",
+      "pronunciation": ""
+    },
+    {
+      "id": "flyin_baked_potato_combo_-_no_protein",
+      "name": "Flyin\u2019 Baked Potato Combo - No Protein",
+      "category": "menu_item",
+      "price": "NEEDS PRICE",
+      "required_slots": "sauce, drizzle, top/side, drink",
+      "rules": "No protein is valid. Price needs confirmation.",
+      "included_components": "",
+      "spanish_terms": "",
+      "pronunciation": ""
+    },
+    {
+      "id": "8_wings_combo",
+      "name": "8 Wings Combo",
+      "category": "menu_item",
+      "price": "$15.45",
+      "required_slots": "sauce, dip, side",
+      "rules": "Only 8 wings combo exists. Includes soft drink.",
+      "included_components": "",
+      "spanish_terms": "",
+      "pronunciation": ""
+    },
+    {
+      "id": "8_boneless_combo",
+      "name": "8 Boneless Combo",
+      "category": "menu_item",
+      "price": "$13.35",
+      "required_slots": "sauce, dip, side",
+      "rules": "Only 8 boneless combo exists. Includes soft drink.",
+      "included_components": "",
+      "spanish_terms": "",
+      "pronunciation": ""
+    },
+    {
+      "id": "12_rack_combo",
+      "name": "1/2 Rack Combo",
+      "category": "menu_item",
+      "price": "$15.35",
+      "required_slots": "rib sauce, side",
+      "rules": "Includes soft drink.",
+      "included_components": "",
+      "spanish_terms": "",
+      "pronunciation": ""
+    },
+    {
+      "id": "12_rack_and_4_bone-in_combo",
+      "name": "1/2 Rack + 4 Bone-In Combo",
+      "category": "menu_item",
+      "price": "$19.65",
+      "required_slots": "rib sauce, wing sauce, wing dip, side",
+      "rules": "Allow 4 boneless instead with kitchen note if requested.",
+      "included_components": "",
+      "spanish_terms": "",
+      "pronunciation": ""
+    },
+    {
+      "id": "4_piece_fish_and_fries",
+      "name": "4 Piece Fish & Fries",
+      "category": "menu_item",
+      "price": "$12.65",
+      "required_slots": "side",
+      "rules": "Do not offer tostones/yuca unless requested.",
+      "included_components": "",
+      "spanish_terms": "",
+      "pronunciation": ""
+    },
+    {
+      "id": "classic_burger_combo",
+      "name": "Classic Burger Combo",
+      "category": "menu_item",
+      "price": "$13.55",
+      "required_slots": "ingredients, changes, side",
+      "rules": "Confirm ingredients, do not ask drink flavor.",
+      "included_components": "",
+      "spanish_terms": "",
+      "pronunciation": ""
+    },
+    {
+      "id": "chicken_sandwich_combo",
+      "name": "Chicken Sandwich Combo",
+      "category": "menu_item",
+      "price": "$12.35",
+      "required_slots": "grilled/fried, ingredients, changes, side",
+      "rules": "Ask grilled or fried first.",
+      "included_components": "",
+      "spanish_terms": "",
+      "pronunciation": ""
+    },
+    {
+      "id": "flyin_burger_combo",
+      "name": "Flyin\u2019 Burger Combo",
+      "category": "menu_item",
+      "price": "$16.65",
+      "required_slots": "grilled/fried chicken, ingredients, changes, side",
+      "rules": "Ask chicken style first.",
+      "included_components": "",
+      "spanish_terms": "",
+      "pronunciation": ""
+    },
+    {
+      "id": "classic_burger",
+      "name": "Classic Burger",
+      "category": "menu_item",
+      "price": "$8.85",
+      "required_slots": "cheese, mayo, lettuce, onion, tomato, pickles",
+      "rules": "Always offer combo first and confirm ingredients.",
+      "included_components": "",
+      "spanish_terms": "",
+      "pronunciation": ""
+    },
+    {
+      "id": "buffalo_burger",
+      "name": "Buffalo Burger",
+      "category": "menu_item",
+      "price": "$9.45",
+      "required_slots": "cheese, buffalo mild, ranch, lettuce, onion, tomato, pickles",
+      "rules": "Combo is not official board item; build as classic combo with backend note.",
+      "included_components": "",
+      "spanish_terms": "",
+      "pronunciation": ""
+    },
+    {
+      "id": "chicken_sandwich",
+      "name": "Chicken Sandwich",
+      "category": "menu_item",
+      "price": "$8.85",
+      "required_slots": "cheese, mayo, lettuce, onion, tomato, pickles",
+      "rules": "Ask grilled or fried first.",
+      "included_components": "",
+      "spanish_terms": "",
+      "pronunciation": ""
+    },
+    {
+      "id": "flyin_burger",
+      "name": "Flyin\u2019 Burger",
+      "category": "menu_item",
+      "price": "$11.55",
+      "required_slots": "beef patty with cheese, chicken patty with cheese, mayo, chipotle ranch, lettuce, onion, tomato, pickles",
+      "rules": "Ask grilled/fried chicken patty.",
+      "included_components": "",
+      "spanish_terms": "",
+      "pronunciation": ""
+    },
+    {
+      "id": "fries",
+      "name": "Fries",
+      "category": "menu_item",
+      "price": "$4.15",
+      "required_slots": "none",
+      "rules": "One size.",
+      "included_components": "",
+      "spanish_terms": "",
+      "pronunciation": ""
+    },
+    {
+      "id": "mac_bites",
+      "name": "Mac Bites",
+      "category": "menu_item",
+      "price": "$7.25",
+      "required_slots": "dip",
+      "rules": "Includes 1 dip.",
+      "included_components": "",
+      "spanish_terms": "",
+      "pronunciation": ""
+    },
+    {
+      "id": "mozzarella_sticks",
+      "name": "Mozzarella Sticks",
+      "category": "menu_item",
+      "price": "$7.25",
+      "required_slots": "none",
+      "rules": "Marinara default; do not mention unless asked.",
+      "included_components": "",
+      "spanish_terms": "",
+      "pronunciation": ""
+    },
+    {
+      "id": "onion_rings",
+      "name": "Onion Rings",
+      "category": "menu_item",
+      "price": "$7.25",
+      "required_slots": "none",
+      "rules": "Ranch default; do not mention unless asked.",
+      "included_components": "",
+      "spanish_terms": "",
+      "pronunciation": ""
+    },
+    {
+      "id": "potato_salad_5.5_oz",
+      "name": "Potato Salad 5.5 oz",
+      "category": "menu_item",
+      "price": "$2.99",
+      "required_slots": "none",
+      "rules": "Side option.",
+      "included_components": "",
+      "spanish_terms": "",
+      "pronunciation": ""
+    },
+    {
+      "id": "sweet_potato_fries",
+      "name": "Sweet Potato Fries",
+      "category": "menu_item",
+      "price": "$4.95",
+      "required_slots": "none",
+      "rules": "Spanish: papas de camote.",
+      "included_components": "",
+      "spanish_terms": "",
+      "pronunciation": ""
+    },
+    {
+      "id": "flyin_corn",
+      "name": "Flyin\u2019 Corn",
+      "category": "menu_item",
+      "price": "$5.90",
+      "required_slots": "none",
+      "rules": "Explain ingredients only if asked.",
+      "included_components": "",
+      "spanish_terms": "",
+      "pronunciation": ""
+    },
+    {
+      "id": "corn_ribs_(4)",
+      "name": "Corn Ribs (4)",
+      "category": "menu_item",
+      "price": "$6.45",
+      "required_slots": "sauce",
+      "rules": "Popular: Lime Pepper, Garlic Parmesan.",
+      "included_components": "",
+      "spanish_terms": "",
+      "pronunciation": ""
+    },
+    {
+      "id": "buffalo_ranch_fries",
+      "name": "Buffalo Ranch Fries",
+      "category": "menu_item",
+      "price": "$8.25",
+      "required_slots": "none",
+      "rules": "Default regular fries if not specified.",
+      "included_components": "",
+      "spanish_terms": "",
+      "pronunciation": ""
+    },
+    {
+      "id": "sampler_platter",
+      "name": "Sampler Platter",
+      "category": "menu_item",
+      "price": "$15.65",
+      "required_slots": "corn ribs sauce",
+      "rules": "3 mac bites, 3 onion rings, 4 corn ribs, 3 mozzarella sticks, sweet potato buffalo ranch fries.",
+      "included_components": "",
+      "spanish_terms": "",
+      "pronunciation": ""
+    },
+    {
+      "id": "kids_4_boneless",
+      "name": "Kids 4 Boneless",
+      "category": "menu_item",
+      "price": "$8.99",
+      "required_slots": "sauce, dip",
+      "rules": "Fries + 12oz soft drink.",
+      "included_components": "",
+      "spanish_terms": "",
+      "pronunciation": ""
+    },
+    {
+      "id": "kids_cheeseburger",
+      "name": "Kids Cheeseburger",
+      "category": "menu_item",
+      "price": "$9.25",
+      "required_slots": "cheese/mayo confirmation",
+      "rules": "Fries + 12oz soft drink.",
+      "included_components": "",
+      "spanish_terms": "",
+      "pronunciation": ""
+    },
+    {
+      "id": "soft_drink_24oz",
+      "name": "Soft Drink 24oz",
+      "category": "menu_item",
+      "price": "$2.99",
+      "required_slots": "none",
+      "rules": "Do not ask flavor for combos.",
+      "included_components": "",
+      "spanish_terms": "",
+      "pronunciation": ""
+    },
+    {
+      "id": "bottled_water",
+      "name": "Bottled Water",
+      "category": "menu_item",
+      "price": "$2.00",
+      "required_slots": "none",
+      "rules": "Allowed on baked potato combo.",
+      "included_components": "",
+      "spanish_terms": "",
+      "pronunciation": ""
+    },
+    {
+      "id": "combo_baked_potato",
+      "prices": {
+        "chicken": 10.89,
+        "steak": 12.95,
+        "pork_belly": 12.95,
+        "no_protein": 4.99
+      },
+      "protein_options": [
+        "chicken",
+        "steak",
+        "pork belly",
+        "no protein"
+      ],
+      "drink_behavior": "soft_drink_or_bottled_water",
+      "included_components": [
+        "butter",
+        "chosen protein if any",
+        "chosen sauce",
+        "chosen drizzle",
+        "sour cream on the side",
+        "cilantro"
+      ],
+      "required_slots": [
+        "protein_choice",
+        "chicken_style_if_chicken",
+        "sauce_choice",
+        "drizzle_choice",
+        "topping_mode",
+        "drink_type"
+      ],
+      "allows_no_sauce": true,
+      "allows_on_side": true
+    },
+    {
+      "id": "kids_wings",
+      "price": 9.49,
+      "active_in_pos": true,
+      "display_name_en": "Kids 4 Classic Wings",
+      "display_name_es": "Kids 4 alitas cl\u00e1sicas",
+      "included_components": [
+        "fries",
+        "12oz soft drink"
+      ],
+      "included_sauces_rule": "1",
+      "included_dips_rule": "1",
+      "drink_behavior": "auto_soft_drink",
+      "allows_no_sauce": true,
+      "allows_on_side": true
     }
-    return res.status(200).json({ results });
-  } catch (error) {
-    console.error("VAPI ERROR:", error);
-    return res.status(200).json({ results: [{ toolCallId: "err", result: JSON.stringify({ ok: false, speak: "I'm sorry, I had a technical glitch." }) }] });
+  ],
+  "last_updated": "2026-04-29",
+  "external_links": {
+    "website": "https://flapsandracks.com/",
+    "online_ordering": "https://order.spoton.com/so-flaps-and-racks-12276/tucson-az/63b5bce795ad377b576a70d5",
+    "note": "SpotOn ordering page may require browser JavaScript / verification; manually verify live POS prices when needed."
   }
-});
-
-app.listen(PORT, () => console.log(`Flaps & Racks Industrial Engine Live on ${PORT}`));
+}
