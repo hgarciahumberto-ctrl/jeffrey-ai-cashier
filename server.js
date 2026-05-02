@@ -1,16 +1,12 @@
 // ===============================
-// FLAPS & RACKS AI CASHIER BACKEND V1.0
-// ES MODULE VERSION FOR RAILWAY
+// FLAPS & RACKS AI CASHIER BACKEND V1.1
+// ES MODULE VERSION FOR RAILWAY + VAPI TOOL FORMAT
 // ===============================
 
 import express from "express";
 
 const app = express();
 app.use(express.json());
-
-// ===============================
-// MENU DATA
-// ===============================
 
 const MENU = {
   wings: {
@@ -25,40 +21,16 @@ const MENU = {
     dipLimit: { 6: 1, 9: 1, 12: 2, 18: 3, 24: 4, 48: 8 }
   },
 
-  sauces: [
-    "barbeque",
-    "teriyaki",
-    "cinnamon roll",
-    "barbeque chiltepin",
-    "mango habanero",
-    "citrus chipotle",
-    "chocolate chiltepin",
-    "mild",
-    "hot",
-    "lime pepper",
-    "garlic parmesan",
-    "pizza",
-    "chorizo",
-    "al pastor",
-    "green chile"
-  ],
-
-  dips: [
-    "ranch",
-    "blue cheese",
-    "chipotle ranch",
-    "jalapeño ranch"
-  ],
-
   pricing: {
     extraSauce: 0.75,
-    buffaloRanchUpgrade: 1.50
+    extraDip: 0.75,
+    buffaloRanchUpgrade: 1.5
   }
 };
 
-// ===============================
-// NORMALIZATION
-// ===============================
+function cleanSpeak(value = "") {
+  return String(value).replace(/\s+/g, " ").trim();
+}
 
 function normalizeText(value = "") {
   return String(value).trim().toLowerCase();
@@ -68,9 +40,9 @@ function normalizeSauce(value = "") {
   const sauce = normalizeText(value);
 
   const aliases = {
-    "bbq": "barbeque",
-    "barbecue": "barbeque",
-    "barbeque": "barbeque",
+    bbq: "barbeque",
+    barbecue: "barbeque",
+    barbeque: "barbeque",
     "buffalo mild": "mild",
     "buffalo hot": "hot",
     "lemon pepper": "lemon pepper",
@@ -79,10 +51,6 @@ function normalizeSauce(value = "") {
 
   return aliases[sauce] || sauce;
 }
-
-// ===============================
-// VALIDATOR ENGINE
-// ===============================
 
 function validateOrder(item = {}) {
   const errors = [];
@@ -119,7 +87,9 @@ function validateOrder(item = {}) {
     }
 
     if ((quantity === 6 || quantity === 9) && sauces.length > 1) {
-      errors.push("For 6 or 9 wings, we can only do one sauce. We can mix two sauces together for an extra sauce charge, but we cannot split them.");
+      errors.push(
+        "For 6 or 9 wings, we can only do one sauce. We can mix two sauces together for an extra sauce charge, but we cannot split them."
+      );
     }
   }
 
@@ -129,10 +99,6 @@ function validateOrder(item = {}) {
     message: errors[0] || "Valid order item."
   };
 }
-
-// ===============================
-// APPLY MENU RULES
-// ===============================
 
 function applyMenuRules(item = {}) {
   const type = normalizeText(item.type);
@@ -155,15 +121,64 @@ function applyMenuRules(item = {}) {
   return finalItem;
 }
 
-// ===============================
-// ROUTES
-// ===============================
+function getVapiToolCalls(body = {}) {
+  const message = body.message || {};
+  return message.toolCalls || message.toolCallList || [];
+}
+
+function getToolArguments(toolCall = {}) {
+  const args =
+    toolCall.function?.arguments ??
+    toolCall.arguments ??
+    toolCall.parameters ??
+    {};
+
+  if (typeof args === "string") {
+    try {
+      return JSON.parse(args);
+    } catch {
+      return {};
+    }
+  }
+
+  return args && typeof args === "object" ? args : {};
+}
+
+function buildOrderResult(item = {}) {
+  const validation = validateOrder(item);
+
+  if (!validation.valid) {
+    const speak = cleanSpeak(
+      validation.message ||
+      validation.errors?.[0] ||
+      "Invalid order item."
+    );
+
+    return {
+      success: false,
+      speak,
+      error: {
+        code: validation.correctionRequired ? "CORRECTION_REQUIRED" : "VALIDATION_ERROR",
+        message: speak,
+        details: validation.errors || []
+      }
+    };
+  }
+
+  const finalItem = applyMenuRules(item);
+
+  return {
+    success: true,
+    speak: "Item added successfully.",
+    item: finalItem
+  };
+}
 
 app.get("/", (req, res) => {
   res.json({
     status: "ok",
     service: "Flaps & Racks AI Cashier Backend",
-    version: "1.0-esm"
+    version: "1.1-vapi-safe-errors"
   });
 });
 
@@ -172,77 +187,18 @@ app.get("/health", (req, res) => {
 });
 
 app.post("/order", (req, res) => {
-  const cleanSpeak = (value = "") => String(value).replace(/\s+/g, " ").trim();
-
-  const getVapiToolCalls = (body = {}) => {
-    const message = body.message || {};
-    return message.toolCalls || message.toolCallList || [];
-  };
-
-  const getToolArguments = (toolCall = {}) => {
-    const args = toolCall.function?.arguments ?? toolCall.arguments ?? toolCall.parameters ?? {};
-
-    if (typeof args === "string") {
-      try {
-        return JSON.parse(args);
-      } catch {
-        return {};
-      }
-    }
-
-    return args && typeof args === "object" ? args : {};
-  };
-
-  const buildStructuredError = (code, message, details = []) => ({
-    code,
-    message: cleanSpeak(message || "Invalid order item."),
-    details: Array.isArray(details) ? details.map(cleanSpeak).filter(Boolean) : []
-  });
-
-  const buildOrderResult = (item = {}) => {
-    const validation = validateOrder(item);
-
-    if (!validation.valid) {
-      const error = buildStructuredError(
-        validation.correctionRequired ? "CORRECTION_REQUIRED" : "VALIDATION_ERROR",
-        validation.message || validation.errors?.[0] || "Invalid order item.",
-        validation.errors || []
-      );
-
-      return {
-        success: false,
-        speak: error.message,
-        error,
-        errors: error.details
-      };
-    }
-
-    const finalItem = applyMenuRules(item);
-    const speak = "Item added successfully.";
-
-    return {
-      success: true,
-      speak,
-      item: finalItem,
-      message: speak
-    };
-  };
-
   try {
     const toolCalls = getVapiToolCalls(req.body);
 
     if (toolCalls.length > 0) {
       return res.json({
         results: toolCalls.map((toolCall) => {
-          const result = buildOrderResult(getToolArguments(toolCall));
+          const item = getToolArguments(toolCall);
+          const result = buildOrderResult(item);
 
-          if (!result.success) {
-            return {
-              toolCallId: toolCall.id,
-              error: cleanSpeak(JSON.stringify(result.error))
-            };
-          }
-
+          // IMPORTANT:
+          // Even validation errors return as "result" so Vapi speaks the correction
+          // instead of treating the tool call as crashed.
           return {
             toolCallId: toolCall.id,
             result: cleanSpeak(result.speak)
@@ -253,41 +209,27 @@ app.post("/order", (req, res) => {
 
     const result = buildOrderResult(req.body || {});
 
-    if (!result.success) {
-      return res.json({
-        success: false,
-        speak: result.speak,
-        message: result.speak,
-        error: result.error,
-        errors: result.errors
-      });
-    }
-
     return res.json({
-      success: true,
-      item: result.item,
+      success: result.success,
       speak: result.speak,
-      message: result.speak
+      message: result.speak,
+      item: result.item || null,
+      error: result.error || null
     });
   } catch (error) {
-    const structuredError = buildStructuredError(
-      "SERVER_ERROR",
-      error.message || "Unexpected server error."
-    );
+    const speak = cleanSpeak(error.message || "Unexpected server error.");
 
     return res.json({
       success: false,
-      speak: structuredError.message,
-      message: structuredError.message,
-      error: structuredError,
-      errors: structuredError.details
+      speak,
+      message: speak,
+      error: {
+        code: "SERVER_ERROR",
+        message: speak
+      }
     });
   }
 });
-
-// ===============================
-// START SERVER
-// ===============================
 
 const PORT = process.env.PORT || 3000;
 
