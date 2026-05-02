@@ -172,31 +172,115 @@ app.get("/health", (req, res) => {
 });
 
 app.post("/order", (req, res) => {
-  try {
-    const item = req.body || {};
+  const cleanSpeak = (value = "") => String(value).replace(/\s+/g, " ").trim();
 
+  const getVapiToolCalls = (body = {}) => {
+    const message = body.message || {};
+    return message.toolCalls || message.toolCallList || [];
+  };
+
+  const getToolArguments = (toolCall = {}) => {
+    const args = toolCall.function?.arguments ?? toolCall.arguments ?? toolCall.parameters ?? {};
+
+    if (typeof args === "string") {
+      try {
+        return JSON.parse(args);
+      } catch {
+        return {};
+      }
+    }
+
+    return args && typeof args === "object" ? args : {};
+  };
+
+  const buildStructuredError = (code, message, details = []) => ({
+    code,
+    message: cleanSpeak(message || "Invalid order item."),
+    details: Array.isArray(details) ? details.map(cleanSpeak).filter(Boolean) : []
+  });
+
+  const buildOrderResult = (item = {}) => {
     const validation = validateOrder(item);
 
     if (!validation.valid) {
-      return res.json({
+      const error = buildStructuredError(
+        validation.correctionRequired ? "CORRECTION_REQUIRED" : "VALIDATION_ERROR",
+        validation.message || validation.errors?.[0] || "Invalid order item.",
+        validation.errors || []
+      );
+
+      return {
         success: false,
-        message: validation.message || validation.errors?.[0] || "Invalid order item.",
-        errors: validation.errors || []
-      });
+        speak: error.message,
+        error,
+        errors: error.details
+      };
     }
 
     const finalItem = applyMenuRules(item);
+    const speak = "Item added successfully.";
+
+    return {
+      success: true,
+      speak,
+      item: finalItem,
+      message: speak
+    };
+  };
+
+  try {
+    const toolCalls = getVapiToolCalls(req.body);
+
+    if (toolCalls.length > 0) {
+      return res.json({
+        results: toolCalls.map((toolCall) => {
+          const result = buildOrderResult(getToolArguments(toolCall));
+
+          if (!result.success) {
+            return {
+              toolCallId: toolCall.id,
+              error: cleanSpeak(JSON.stringify(result.error))
+            };
+          }
+
+          return {
+            toolCallId: toolCall.id,
+            result: cleanSpeak(result.speak)
+          };
+        })
+      });
+    }
+
+    const result = buildOrderResult(req.body || {});
+
+    if (!result.success) {
+      return res.json({
+        success: false,
+        speak: result.speak,
+        message: result.speak,
+        error: result.error,
+        errors: result.errors
+      });
+    }
 
     return res.json({
       success: true,
-      item: finalItem,
-      message: "Item added successfully."
+      item: result.item,
+      speak: result.speak,
+      message: result.speak
     });
-
   } catch (error) {
-    return res.status(500).json({
+    const structuredError = buildStructuredError(
+      "SERVER_ERROR",
+      error.message || "Unexpected server error."
+    );
+
+    return res.json({
       success: false,
-      message: error.message || "Unexpected server error."
+      speak: structuredError.message,
+      message: structuredError.message,
+      error: structuredError,
+      errors: structuredError.details
     });
   }
 });
