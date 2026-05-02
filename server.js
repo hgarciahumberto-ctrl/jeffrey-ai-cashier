@@ -1,6 +1,6 @@
 // ===============================
-// FLAPS & RACKS AI CASHIER BACKEND V1.1
-// ES MODULE VERSION FOR RAILWAY + VAPI TOOL FORMAT
+// FLAPS & RACKS AI CASHIER BACKEND V1.2.1
+// Codex-base + Vapi Safe Result Fix
 // ===============================
 
 import express from "express";
@@ -8,118 +8,221 @@ import express from "express";
 const app = express();
 app.use(express.json());
 
-const MENU = {
-  wings: {
-    sizes: [6, 9, 12, 18, 24, 48],
-    sauceLimit: { 6: 1, 9: 1, 12: 2, 18: 3, 24: 4, 48: 8 },
-    dipLimit: { 6: 1, 9: 1, 12: 2, 18: 3, 24: 4, 48: 8 }
-  },
+const VERSION = "1.2.1-full-menu-vapi-safe";
 
-  boneless: {
-    sizes: [6, 9, 12, 18, 24, 48],
-    sauceLimit: { 6: 1, 9: 1, 12: 2, 18: 3, 24: 4, 48: 8 },
-    dipLimit: { 6: 1, 9: 1, 12: 2, 18: 3, 24: 4, 48: 8 }
-  },
+// ===============================
+// CONSTANTS
+// ===============================
 
-  pricing: {
-    extraSauce: 0.75,
-    extraDip: 0.75,
-    buffaloRanchUpgrade: 1.5
-  }
+const SAUCES = [
+  "al pastor",
+  "barbeque",
+  "barbeque chiltepin",
+  "chorizo",
+  "chocolate chiltepin",
+  "cinnamon roll",
+  "citrus chipotle",
+  "garlic parmesan",
+  "green chile",
+  "buffalo hot",
+  "lime pepper",
+  "buffalo mild",
+  "mango habanero",
+  "pizza",
+  "teriyaki",
+  "flavor of the month"
+];
+
+const DIPS = [
+  "ranch",
+  "blue cheese",
+  "chipotle ranch",
+  "jalapeno ranch"
+];
+
+const SIDE_CHOICES = [
+  "regular fries",
+  "fries",
+  "sweet potato fries",
+  "potato salad",
+  "buffalo ranch fries"
+];
+
+const PROTEINS = [
+  "chicken",
+  "steak",
+  "pork belly",
+  "no protein"
+];
+
+const CHICKEN_STYLES = [
+  "grilled",
+  "fried"
+];
+
+// ===============================
+// HELPERS
+// ===============================
+
+const clean = (value = "") => String(value).trim().toLowerCase();
+const cleanSpeak = (value = "") => String(value).replace(/\s+/g, " ").trim();
+
+const asArray = (value) => {
+  if (Array.isArray(value)) return value;
+  if (!value) return [];
+  return [value];
 };
 
-function cleanSpeak(value = "") {
-  return String(value).replace(/\s+/g, " ").trim();
-}
-
-function normalizeText(value = "") {
-  return String(value).trim().toLowerCase();
-}
-
-function normalizeSauce(value = "") {
-  const sauce = normalizeText(value);
-
-  const aliases = {
+const normalizeSauce = (value = "") => {
+  const map = {
     bbq: "barbeque",
     barbecue: "barbeque",
     barbeque: "barbeque",
-    "buffalo mild": "mild",
-    "buffalo hot": "hot",
+    mild: "buffalo mild",
+    hot: "buffalo hot",
     "lemon pepper": "lemon pepper",
-    "lime pepper": "lime pepper"
+    "lime pepper": "lime pepper",
+    "laim pepper": "lime pepper"
   };
+  return map[clean(value)] || clean(value);
+};
 
-  return aliases[sauce] || sauce;
-}
+const normalizeDip = (value = "") => {
+  const map = {
+    "jalapeño ranch": "jalapeno ranch",
+    "jalapeno ranch": "jalapeno ranch"
+  };
+  return map[clean(value)] || clean(value);
+};
+
+const normalizeSide = (value = "") => {
+  const map = {
+    fries: "regular fries",
+    papas: "regular fries",
+    "papas de camote": "sweet potato fries",
+    "ensalada de papa": "potato salad"
+  };
+  return map[clean(value)] || clean(value);
+};
+
+const normalizeProtein = (value = "") => {
+  const map = {
+    "carne asada": "steak",
+    pollo: "chicken",
+    "sin proteina": "no protein",
+    "sin proteína": "no protein"
+  };
+  return map[clean(value)] || clean(value);
+};
+
+// ===============================
+// VALIDATOR
+// ===============================
 
 function validateOrder(item = {}) {
-  const errors = [];
+  const type = clean(item.itemId || item.type);
+  const qty = Number(item.quantity);
 
-  const type = normalizeText(item.type);
-  const quantity = Number(item.quantity);
-  const sauces = Array.isArray(item.sauces) ? item.sauces.map(normalizeSauce) : [];
-  const dips = Array.isArray(item.dips) ? item.dips.map(normalizeText) : [];
+  const sauces = asArray(item.sauces).map(normalizeSauce);
+  const dips = asArray(item.dips).map(normalizeDip);
 
+  // ITEM
+  if (!type) {
+    return fail("Missing item.");
+  }
+
+  // LEMON PEPPER FIX
   if (sauces.includes("lemon pepper")) {
-    return {
-      valid: false,
-      correctionRequired: true,
-      message: "We have that as lime pepper. Is that okay?"
-    };
+    return correction("We have that as lime pepper. Is that okay?");
   }
 
-  if (type === "wings" || type === "classic_wings" || type === "boneless") {
-    const rules = type === "boneless" ? MENU.boneless : MENU.wings;
+  // INVALID SAUCES
+  const invalidSauces = sauces.filter(s => !SAUCES.includes(s));
+  if (invalidSauces.length) {
+    return fail(`We do not have ${invalidSauces.join(", ")} as a sauce option.`);
+  }
 
-    if (!rules.sizes.includes(quantity)) {
-      errors.push("That quantity is not available. Available sizes are 6, 9, 12, 18, 24, and 48.");
+  // INVALID DIPS
+  const invalidDips = dips.filter(d => !DIPS.includes(d));
+  if (invalidDips.length) {
+    return fail(`We do not have ${invalidDips.join(", ")} as a dip option.`);
+  }
+
+  // WINGS / BONELESS
+  if (type.includes("wings") || type.includes("boneless")) {
+    const limits = {6:1,9:1,12:2,18:3,24:4,48:8};
+
+    if (!limits[qty]) {
+      return fail("Available quantities are 6, 9, 12, 18, 24, or 48.");
     }
 
-    const maxSauces = rules.sauceLimit[quantity];
-    const maxDips = rules.dipLimit[quantity];
-
-    if (maxSauces && sauces.length > maxSauces) {
-      errors.push(`That order includes up to ${maxSauces} sauce${maxSauces > 1 ? "s" : ""}.`);
+    if (sauces.length > limits[qty]) {
+      return fail(`That order includes up to ${limits[qty]} sauce${limits[qty]>1?"s":""}.`);
     }
 
-    if (maxDips && dips.length > maxDips) {
-      errors.push(`That order includes up to ${maxDips} dip${maxDips > 1 ? "s" : ""}.`);
+    if (dips.length > limits[qty]) {
+      return fail(`That order includes up to ${limits[qty]} dip${limits[qty]>1?"s":""}.`);
     }
 
-    if ((quantity === 6 || quantity === 9) && sauces.length > 1) {
-      errors.push(
-        "For 6 or 9 wings, we can only do one sauce. We can mix two sauces together for an extra sauce charge, but we cannot split them."
-      );
+    if ((qty === 6 || qty === 9) && sauces.length > 1) {
+      return fail("6 or 9 wings can only have one sauce.");
     }
   }
 
+  // SIDE
+  if (item.sideChoice && !SIDE_CHOICES.includes(normalizeSide(item.sideChoice))) {
+    return fail("Invalid side choice.");
+  }
+
+  // PROTEIN
+  if (item.protein && !PROTEINS.includes(normalizeProtein(item.protein))) {
+    return fail("Invalid protein.");
+  }
+
+  // CHICKEN STYLE
+  if (item.chickenStyle && !CHICKEN_STYLES.includes(clean(item.chickenStyle))) {
+    return fail("Chicken must be grilled or fried.");
+  }
+
+  return success({
+    ...item,
+    itemId: type,
+    quantity: qty || item.quantity,
+    sauces,
+    dips
+  });
+}
+
+// ===============================
+// RESPONSES
+// ===============================
+
+function success(item) {
   return {
-    valid: errors.length === 0,
-    errors,
-    message: errors[0] || "Valid order item."
+    success: true,
+    speak: "Perfect.",
+    item
   };
 }
 
-function applyMenuRules(item = {}) {
-  const type = normalizeText(item.type);
-  const finalItem = { ...item };
-
-  if (!finalItem.saucePlacement) {
-    finalItem.saucePlacement = "mixed";
-  }
-
-  if (type === "buffalo_burger_combo") {
-    finalItem.baseItem = "classic_burger_combo";
-    finalItem.modifications = [
-      { action: "remove", item: "mayo", price: 0 },
-      { action: "add", item: "ranch", price: 0 },
-      { action: "add", item: "buffalo sauce", price: 0.75 }
-    ];
-    finalItem.kitchenNote = "Sub ranch for mayo + buffalo sauce side charge";
-  }
-
-  return finalItem;
+function fail(message) {
+  return {
+    success: false,
+    speak: cleanSpeak(message)
+  };
 }
+
+function correction(message) {
+  return {
+    success: false,
+    speak: cleanSpeak(message),
+    correction: true
+  };
+}
+
+// ===============================
+// VAPI HELPERS
+// ===============================
 
 function getVapiToolCalls(body = {}) {
   const message = body.message || {};
@@ -141,49 +244,15 @@ function getToolArguments(toolCall = {}) {
     }
   }
 
-  return args && typeof args === "object" ? args : {};
+  return args || {};
 }
 
-function buildOrderResult(item = {}) {
-  const validation = validateOrder(item);
-
-  if (!validation.valid) {
-    const speak = cleanSpeak(
-      validation.message ||
-      validation.errors?.[0] ||
-      "Invalid order item."
-    );
-
-    return {
-      success: false,
-      speak,
-      error: {
-        code: validation.correctionRequired ? "CORRECTION_REQUIRED" : "VALIDATION_ERROR",
-        message: speak,
-        details: validation.errors || []
-      }
-    };
-  }
-
-  const finalItem = applyMenuRules(item);
-
-  return {
-    success: true,
-    speak: "Item added successfully.",
-    item: finalItem
-  };
-}
-
-app.get("/", (req, res) => {
-  res.json({
-    status: "ok",
-    service: "Flaps & Racks AI Cashier Backend",
-    version: "1.1-vapi-safe-errors"
-  });
-});
+// ===============================
+// ROUTES
+// ===============================
 
 app.get("/health", (req, res) => {
-  res.json({ ok: true });
+  res.json({ ok: true, version: VERSION });
 });
 
 app.post("/order", (req, res) => {
@@ -194,11 +263,9 @@ app.post("/order", (req, res) => {
       return res.json({
         results: toolCalls.map((toolCall) => {
           const item = getToolArguments(toolCall);
-          const result = buildOrderResult(item);
+          const result = validateOrder(item);
 
-          // IMPORTANT:
-          // Even validation errors return as "result" so Vapi speaks the correction
-          // instead of treating the tool call as crashed.
+          // 🔥 CRITICAL FIX (VAPI SAFE)
           return {
             toolCallId: toolCall.id,
             result: cleanSpeak(result.speak)
@@ -207,32 +274,30 @@ app.post("/order", (req, res) => {
       });
     }
 
-    const result = buildOrderResult(req.body || {});
+    const result = validateOrder(req.body);
 
     return res.json({
       success: result.success,
       speak: result.speak,
-      message: result.speak,
-      item: result.item || null,
-      error: result.error || null
+      result: result.speak,
+      item: result.item || null
     });
-  } catch (error) {
-    const speak = cleanSpeak(error.message || "Unexpected server error.");
 
+  } catch (err) {
     return res.json({
       success: false,
-      speak,
-      message: speak,
-      error: {
-        code: "SERVER_ERROR",
-        message: speak
-      }
+      speak: "Server error.",
+      result: "Server error."
     });
   }
 });
 
+// ===============================
+// START SERVER
+// ===============================
+
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Flaps & Racks AI Cashier backend running on port ${PORT}`);
+  console.log(`Server running ${VERSION} on port ${PORT}`);
 });
