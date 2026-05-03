@@ -40,11 +40,11 @@ const MENU = {
 // ===============================
 
 const ALIASES = {
-  "flyin salad": "flyin_salad",
-  "flying salad": "flyin_salad",
-  "flain salad": "flyin_salad",
-  "ensalada flyin": "flyin_salad",
-  "flyin ensalada": "flyin_salad",
+  "flayn salad": "flyin_salad",
+  "flaing salad": "flyin_salad",
+  "flane salad": "flyin_salad",
+  "flyn salad": "flyin_salad",
+  "fly salad": "flyin_salad",
 
   "house salad": "house_salad",
   "ensalada house": "house_salad",
@@ -99,7 +99,31 @@ function validateOrder(item){
   // Wings logic
   if(itemId === "wings" || itemId === "boneless"){
     const qty = item.quantity;
-    const sauces = item.sauces || [];
+    function normalizeSauceName(sauce = "") {
+  const s = sauce.toLowerCase().trim();
+
+  const map = {
+    "bbq": "barbeque",
+    "barbecue": "barbeque",
+    "barbeque": "barbeque",
+    "barbiquiu": "barbeque",
+
+    "bbq chiltepin": "barbeque chiltepin",
+    "barbiquiu chiltepin": "barbeque chiltepin",
+    "barbiquiu chiltepín": "barbeque chiltepin",
+    "barbecue chiltepin": "barbeque chiltepin",
+    "chiltepin bbq": "barbeque chiltepin",
+
+    "mild": "buffalo mild",
+    "hot": "buffalo hot",
+
+    "lemon pepper": "lemon pepper",
+    "lime pepper": "lime pepper",
+    "laim pepper": "lime pepper"
+  };
+
+  return map[s] || s;
+}
 
     if(!data.prices[qty]){
       return {ok:false,speak:"Invalid quantity."};
