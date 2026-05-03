@@ -1,274 +1,175 @@
-// ===============================
-// FLAPS & RACKS AI CASHIER BACKEND V1.2.1
-// Codex-base + Vapi Safe Result Fix
-// ===============================
-
 import express from "express";
 
 const app = express();
 app.use(express.json());
 
-const VERSION = "1.2.1-full-menu-vapi-safe";
+const PORT = process.env.PORT || 3000;
 
 // ===============================
-// CONSTANTS
+// MENU (CORE FIX)
 // ===============================
 
-const SAUCES = [
-  "al pastor",
-  "barbeque",
-  "barbeque chiltepin",
-  "chorizo",
-  "chocolate chiltepin",
-  "cinnamon roll",
-  "citrus chipotle",
-  "garlic parmesan",
-  "green chile",
-  "buffalo hot",
-  "lime pepper",
-  "buffalo mild",
-  "mango habanero",
-  "pizza",
-  "teriyaki",
-  "flavor of the month"
-];
+const MENU = {
+  flyin_salad: {
+    name: "Flyin Salad",
+    price: 11.30,
+    required: ["chickenStyle", "dressing"]
+  },
+  house_salad: {
+    name: "House Salad",
+    price: 7.70,
+    required: ["dressing"]
+  },
+  classic_burger_combo: {
+    name: "Classic Burger Combo",
+    price: 13.55,
+    required: ["sideChoice"]
+  },
+  wings: {
+    prices: {6:10.10,9:14.20,12:18.30,18:23.65,24:30.65,48:58.50},
+    sauceLimit: {6:1,9:1,12:2,18:3,24:4,48:8}
+  },
+  boneless: {
+    prices: {6:9.05,9:13.35,12:16.45,18:22.65,24:28.85,48:56.85},
+    sauceLimit: {6:1,9:1,12:2,18:3,24:4,48:8}
+  }
+};
 
-const DIPS = [
-  "ranch",
-  "blue cheese",
-  "chipotle ranch",
-  "jalapeno ranch"
-];
+// ===============================
+// ALIASES (CRITICAL FIX)
+// ===============================
 
-const SIDE_CHOICES = [
-  "regular fries",
-  "fries",
-  "sweet potato fries",
-  "potato salad",
-  "buffalo ranch fries"
-];
+const ALIASES = {
+  "flyin salad": "flyin_salad",
+  "flying salad": "flyin_salad",
+  "flain salad": "flyin_salad",
+  "ensalada flyin": "flyin_salad",
+  "flyin ensalada": "flyin_salad",
 
-const PROTEINS = [
-  "chicken",
-  "steak",
-  "pork belly",
-  "no protein"
-];
+  "house salad": "house_salad",
+  "ensalada house": "house_salad",
 
-const CHICKEN_STYLES = [
-  "grilled",
-  "fried"
-];
+  "classic burger combo": "classic_burger_combo",
+  "combo hamburguesa classic": "classic_burger_combo",
+
+  "wings": "wings",
+  "alitas": "wings",
+
+  "boneless": "boneless"
+};
 
 // ===============================
 // HELPERS
 // ===============================
 
-const clean = (value = "") => String(value).trim().toLowerCase();
-const cleanSpeak = (value = "") => String(value).replace(/\s+/g, " ").trim();
+const clean = (v="") => v.toLowerCase().trim();
 
-const asArray = (value) => {
-  if (Array.isArray(value)) return value;
-  if (!value) return [];
-  return [value];
-};
-
-const normalizeSauce = (value = "") => {
-  const map = {
-    bbq: "barbeque",
-    barbecue: "barbeque",
-    barbeque: "barbeque",
-    mild: "buffalo mild",
-    hot: "buffalo hot",
-    "lemon pepper": "lemon pepper",
-    "lime pepper": "lime pepper",
-    "laim pepper": "lime pepper"
-  };
-  return map[clean(value)] || clean(value);
-};
-
-const normalizeDip = (value = "") => {
-  const map = {
-    "jalapeño ranch": "jalapeno ranch",
-    "jalapeno ranch": "jalapeno ranch"
-  };
-  return map[clean(value)] || clean(value);
-};
-
-const normalizeSide = (value = "") => {
-  const map = {
-    fries: "regular fries",
-    papas: "regular fries",
-    "papas de camote": "sweet potato fries",
-    "ensalada de papa": "potato salad"
-  };
-  return map[clean(value)] || clean(value);
-};
-
-const normalizeProtein = (value = "") => {
-  const map = {
-    "carne asada": "steak",
-    pollo: "chicken",
-    "sin proteina": "no protein",
-    "sin proteína": "no protein"
-  };
-  return map[clean(value)] || clean(value);
-};
+function resolveItem(name){
+  const key = clean(name);
+  return ALIASES[key] || key;
+}
 
 // ===============================
 // VALIDATOR
 // ===============================
 
-function validateOrder(item = {}) {
-  const type = clean(item.itemId || item.type);
-  const qty = Number(item.quantity);
+function validateOrder(item){
+  const itemId = resolveItem(item.itemId || item.type || "");
+  const data = MENU[itemId];
 
-  const sauces = asArray(item.sauces).map(normalizeSauce);
-  const dips = asArray(item.dips).map(normalizeDip);
-
-  // ITEM
-  if (!type) {
-    return fail("Missing item.");
+  if(!data){
+    return {
+      ok:false,
+      speak:"I do not have that item."
+    };
   }
 
-  // LEMON PEPPER FIX
-  if (sauces.includes("lemon pepper")) {
-    return correction("We have that as lime pepper. Is that okay?");
-  }
-
-  // INVALID SAUCES
-  const invalidSauces = sauces.filter(s => !SAUCES.includes(s));
-  if (invalidSauces.length) {
-    return fail(`We do not have ${invalidSauces.join(", ")} as a sauce option.`);
-  }
-
-  // INVALID DIPS
-  const invalidDips = dips.filter(d => !DIPS.includes(d));
-  if (invalidDips.length) {
-    return fail(`We do not have ${invalidDips.join(", ")} as a dip option.`);
-  }
-
-  // WINGS / BONELESS
-  if (type.includes("wings") || type.includes("boneless")) {
-    const limits = {6:1,9:1,12:2,18:3,24:4,48:8};
-
-    if (!limits[qty]) {
-      return fail("Available quantities are 6, 9, 12, 18, 24, or 48.");
-    }
-
-    if (sauces.length > limits[qty]) {
-      return fail(`That order includes up to ${limits[qty]} sauce${limits[qty]>1?"s":""}.`);
-    }
-
-    if (dips.length > limits[qty]) {
-      return fail(`That order includes up to ${limits[qty]} dip${limits[qty]>1?"s":""}.`);
-    }
-
-    if ((qty === 6 || qty === 9) && sauces.length > 1) {
-      return fail("6 or 9 wings can only have one sauce.");
+  // Missing slots
+  if(data.required){
+    for(const slot of data.required){
+      if(!item[slot]){
+        return {
+          ok:false,
+          speak: getMissingQuestion(slot)
+        };
+      }
     }
   }
 
-  // SIDE
-  if (item.sideChoice && !SIDE_CHOICES.includes(normalizeSide(item.sideChoice))) {
-    return fail("Invalid side choice.");
+  // Wings logic
+  if(itemId === "wings" || itemId === "boneless"){
+    const qty = item.quantity;
+    const sauces = item.sauces || [];
+
+    if(!data.prices[qty]){
+      return {ok:false,speak:"Invalid quantity."};
+    }
+
+    if(sauces.length > data.sauceLimit[qty]){
+      return {
+        ok:false,
+        speak:`That order includes up to ${data.sauceLimit[qty]} sauces.`
+      };
+    }
   }
 
-  // PROTEIN
-  if (item.protein && !PROTEINS.includes(normalizeProtein(item.protein))) {
-    return fail("Invalid protein.");
-  }
-
-  // CHICKEN STYLE
-  if (item.chickenStyle && !CHICKEN_STYLES.includes(clean(item.chickenStyle))) {
-    return fail("Chicken must be grilled or fried.");
-  }
-
-  return success({
-    ...item,
-    itemId: type,
-    quantity: qty || item.quantity,
-    sauces,
-    dips
-  });
-}
-
-// ===============================
-// RESPONSES
-// ===============================
-
-function success(item) {
   return {
-    success: true,
-    speak: "Perfect.",
-    item
-  };
-}
-
-function fail(message) {
-  return {
-    success: false,
-    speak: cleanSpeak(message)
-  };
-}
-
-function correction(message) {
-  return {
-    success: false,
-    speak: cleanSpeak(message),
-    correction: true
+    ok:true,
+    speak:"Perfect.",
+    item:{
+      ...item,
+      itemId,
+      price: calculatePrice(itemId,item)
+    }
   };
 }
 
 // ===============================
-// VAPI HELPERS
+// QUESTIONS
 // ===============================
 
-function getVapiToolCalls(body = {}) {
-  const message = body.message || {};
-  return message.toolCalls || message.toolCallList || [];
+function getMissingQuestion(slot){
+  const map = {
+    chickenStyle:"Would you like grilled or fried chicken?",
+    dressing:"What dressing would you like?",
+    sideChoice:"What side would you like: fries, sweet potato fries, or potato salad?"
+  };
+  return map[slot] || "Can you confirm that?";
 }
 
-function getToolArguments(toolCall = {}) {
-  const args =
-    toolCall.function?.arguments ??
-    toolCall.arguments ??
-    toolCall.parameters ??
-    {};
+// ===============================
+// PRICE
+// ===============================
 
-  if (typeof args === "string") {
-    try {
-      return JSON.parse(args);
-    } catch {
-      return {};
-    }
+function calculatePrice(itemId,item){
+  const data = MENU[itemId];
+
+  if(data.price) return data.price;
+
+  if(data.prices){
+    return data.prices[item.quantity] || 0;
   }
 
-  return args || {};
+  return 0;
 }
 
 // ===============================
-// ROUTES
+// VAPI HANDLER (FIXED)
 // ===============================
 
-app.get("/health", (req, res) => {
-  res.json({ ok: true, version: VERSION });
-});
+app.post("/order",(req,res)=>{
+  try{
+    const toolCalls = req.body?.message?.toolCalls || [];
 
-app.post("/order", (req, res) => {
-  try {
-    const toolCalls = getVapiToolCalls(req.body);
-
-    if (toolCalls.length > 0) {
+    if(toolCalls.length){
       return res.json({
-        results: toolCalls.map((toolCall) => {
-          const item = getToolArguments(toolCall);
-          const result = validateOrder(item);
+        results: toolCalls.map(tc=>{
+          const args = JSON.parse(tc.function.arguments || "{}");
+          const result = validateOrder(args);
 
-          // 🔥 CRITICAL FIX (VAPI SAFE)
           return {
-            toolCallId: toolCall.id,
-            result: cleanSpeak(result.speak)
+            toolCallId: tc.id,
+            result: result.speak   // 🔥 VAPI SAFE
           };
         })
       });
@@ -277,27 +178,27 @@ app.post("/order", (req, res) => {
     const result = validateOrder(req.body);
 
     return res.json({
-      success: result.success,
+      success: result.ok,
       speak: result.speak,
       result: result.speak,
       item: result.item || null
     });
 
-  } catch (err) {
+  }catch(e){
     return res.json({
-      success: false,
-      speak: "Server error.",
-      result: "Server error."
+      success:false,
+      speak:"Server error",
+      result:"Server error"
     });
   }
 });
 
 // ===============================
-// START SERVER
-// ===============================
 
-const PORT = process.env.PORT || 3000;
+app.get("/health",(req,res)=>{
+  res.json({ok:true});
+});
 
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Server running ${VERSION} on port ${PORT}`);
+app.listen(PORT,()=>{
+  console.log("Server running on",PORT);
 });
