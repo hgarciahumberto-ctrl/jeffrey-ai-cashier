@@ -40,14 +40,29 @@ const MENU = {
 // ===============================
 
 const ALIASES = {
+  "flyin salad": "flyin_salad",
+  "flying salad": "flyin_salad",
+  "flain salad": "flyin_salad",
   "flayn salad": "flyin_salad",
   "flaing salad": "flyin_salad",
   "flane salad": "flyin_salad",
   "flyn salad": "flyin_salad",
   "fly salad": "flyin_salad",
+  "ensalada flyin": "flyin_salad",
+  "ensalada flain": "flyin_salad",
+  "ensalada flayn": "flyin_salad",
+  "ensalada flying": "flyin_salad",
+  "flyin ensalada": "flyin_salad",
+  "salad flyin": "flyin_salad",
+  "salad flain": "flyin_salad",
 
   "house salad": "house_salad",
+  "haus salad": "house_salad",
+  "jaus salad": "house_salad",
   "ensalada house": "house_salad",
+  "ensalada haus": "house_salad",
+  "ensalada jaus": "house_salad",
+  "house ensalada": "house_salad",
 
   "classic burger combo": "classic_burger_combo",
   "combo hamburguesa classic": "classic_burger_combo",
