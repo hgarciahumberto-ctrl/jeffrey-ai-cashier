@@ -1,5 +1,5 @@
 // ===============================
-// FLAPS & RACKS AI CASHIER BACKEND V1.4
+// FLAPS & RACKS AI CASHIER BACKEND V1.4 WITH TAXES
 // Cart + Totals + Tucson Tax + Customer Memory + Transfer Intent + POS Stub
 // ES MODULE VERSION FOR RAILWAY + VAPI
 // ===============================
