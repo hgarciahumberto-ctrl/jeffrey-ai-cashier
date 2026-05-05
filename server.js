@@ -21,8 +21,8 @@ const PORT = process.env.PORT || 3000;
 const TAX_RATE = Number(process.env.TAX_RATE || 0.087);
 
 // Flaps physical phone number for escalation / transfer.
-// Set in Railway as RESTAURANT_PHONE=+15204755345
-const RESTAURANT_PHONE = process.env.RESTAURANT_PHONE || "+15204755345";
+// Set in Railway as RESTAURANT_PHONE=+15206582634
+const RESTAURANT_PHONE = process.env.RESTAURANT_PHONE || "+15206582634";
 
 // Optional POS mode.
 // "stub" = logs order only.
