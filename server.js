@@ -330,14 +330,18 @@ function getLanguage(payload = {}) {
 }
 
 function getSessionId(payload = {}) {
-  return (
+  const existing =
     payload.sessionId ||
     payload.callId ||
     payload.call?.id ||
     payload.message?.call?.id ||
     payload.message?.callId ||
-    "default-session"
-  );
+    payload.message?.call?.id ||
+    payload.message?.call?.sid;
+
+  if (existing) return existing;
+
+  return `manual-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 function getPhone(payload = {}) {
