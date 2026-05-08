@@ -1222,15 +1222,28 @@ app.post("/order", async (req, res) => {
     if (toolCalls.length > 0) {
       const results = [];
 
-      for (const toolCall of toolCalls) {
-        const args = getToolArguments(toolCall);
-        const result = await handleAction(args);
+     const requestSessionId = getSessionId(req.body);
+const requestPhone = getPhone(req.body);
 
-        results.push({
-          toolCallId: toolCall.id,
-          result: cleanSpeak(result.speak || "Okay.")
-        });
-      }
+for (const toolCall of toolCalls) {
+  const args = getToolArguments(toolCall);
+
+  const enrichedArgs = {
+    ...args,
+    sessionId: args.sessionId || requestSessionId,
+    callId: args.callId || requestSessionId,
+    phone: args.phone || requestPhone
+  };
+
+  console.log("VAPI TOOL CALL ARGS:", JSON.stringify(enrichedArgs, null, 2));
+
+  const result = await handleAction(enrichedArgs);
+
+  results.push({
+    toolCallId: toolCall.id,
+    result: cleanSpeak(result.speak || "Okay.")
+  });
+}
 
       return res.json({ results });
     }
