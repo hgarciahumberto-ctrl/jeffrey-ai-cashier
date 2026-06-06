@@ -1,6 +1,6 @@
 // ===============================
-// FLAPS & RACKS AI CASHIER BACKEND V1.5
-// Cart + Totals + Tucson Tax + Customer Memory + Transfer Intent + POS Stub
+// FLAPS & RACKS AI CASHIER BACKEND V1.6B
+// Cart + Totals + Tucson Tax + Customer Memory + Transfer Intent + Transfer Messages + POS Stub
 // Robust Vapi Input Cleaner + Flow-Safe Validation
 // ES MODULE VERSION FOR RAILWAY + VAPI
 // ===============================
@@ -10,15 +10,16 @@ import express from "express";
 const app = express();
 app.use(express.json({ limit: "1mb" }));
 
-const VERSION = "1.5-robust-parser-flow-lock";
+const VERSION = "1.6B-transfer-message-mvp";
 
 const PORT = process.env.PORT || 3000;
 const TAX_RATE = Number(process.env.TAX_RATE || 0.087);
-const RESTAURANT_PHONE = process.env.RESTAURANT_PHONE || "+15206582634";
+const RESTAURANT_PHONE = process.env.RESTAURANT_PHONE || "+15203394476";
 const POS_MODE = process.env.POS_MODE || "stub";
 
 const sessions = {};
 const customers = {};
+const transferMessages = [];
 
 // ===============================
 // MENU
@@ -285,7 +286,7 @@ const MENU = {
   kids_cheeseburger: {
     label: "Kids Cheeseburger",
     family: "kids",
-    price: 9.25,
+    price: 9.49,
     requiredSlots: []
   },
 
@@ -1028,6 +1029,11 @@ function detectTransferIntent(text = "") {
     "application",
     "aplicacion",
     "aplicación",
+    "vendor",
+    "proveedor",
+    "catering",
+    "event",
+    "evento",
     "not ordering",
     "no quiero ordenar"
   ];
@@ -1049,6 +1055,65 @@ function transferResponse(lang) {
   };
 }
 
+function createTransferMessage(payload = {}) {
+  const lang = getLanguage(payload);
+  const sessionId = getSessionId(payload);
+  const phone = getPhone(payload);
+
+  const customerName = cleanSpeak(
+    payload.customerName ||
+    payload.name ||
+    payload.customer_name ||
+    ""
+  );
+
+  const callbackPhone = cleanSpeak(
+    payload.callbackPhone ||
+    payload.callback_phone ||
+    payload.customerPhone ||
+    payload.phone ||
+    phone ||
+    ""
+  );
+
+  const reason = cleanSpeak(
+    payload.reason ||
+    payload.text ||
+    payload.message ||
+    payload.description ||
+    ""
+  );
+
+  const transferMessage = {
+    id: `TM-${Date.now().toString().slice(-8)}`,
+    createdAt: new Date().toISOString(),
+    sessionId,
+    callId: payload.callId || sessionId,
+    language: lang,
+    customerName: customerName || "Not provided",
+    callbackPhone: callbackPhone || "Not provided",
+    reason: reason || "No reason provided",
+    text: reason || "No message provided",
+    status: "saved_before_vapi_transfer",
+    transferDestination: RESTAURANT_PHONE
+  };
+
+  transferMessages.push(transferMessage);
+
+  console.log("TRANSFER MESSAGE SAVED:", JSON.stringify(transferMessage, null, 2));
+
+  return {
+    success: true,
+    ok: true,
+    transferMessage,
+    speak: speak(
+      lang,
+      "Thank you. I saved your message. I will connect you with the restaurant now.",
+      "Gracias. Guardé su mensaje. Ahora le voy a conectar con el restaurante."
+    )
+  };
+}
+
 // ===============================
 // ACTION HANDLER
 // ===============================
@@ -1059,6 +1124,24 @@ async function handleAction(payload = {}) {
   const sessionId = getSessionId(payload);
   const phone = getPhone(payload);
   const cart = ensureSession(sessionId, phone);
+
+  if (action === "transfer_message") {
+    return createTransferMessage(payload);
+  }
+
+  if (action === "get_transfer_messages") {
+    return {
+      success: true,
+      ok: true,
+      count: transferMessages.length,
+      transferMessages,
+      speak: speak(
+        lang,
+        "Transfer messages retrieved.",
+        "Mensajes de transferencia encontrados."
+      )
+    };
+  }
 
   if (payload.text && detectTransferIntent(payload.text)) {
     return transferResponse(lang);
@@ -1211,7 +1294,17 @@ app.get("/health", (req, res) => {
     version: VERSION,
     taxRate: TAX_RATE,
     restaurantPhone: RESTAURANT_PHONE,
-    posMode: POS_MODE
+    posMode: POS_MODE,
+    transferMessagesCount: transferMessages.length
+  });
+});
+
+app.get("/transfer-messages", (req, res) => {
+  res.json({
+    ok: true,
+    version: VERSION,
+    count: transferMessages.length,
+    transferMessages
   });
 });
 
@@ -1222,28 +1315,28 @@ app.post("/order", async (req, res) => {
     if (toolCalls.length > 0) {
       const results = [];
 
-     const requestSessionId = getSessionId(req.body);
-const requestPhone = getPhone(req.body);
+      const requestSessionId = getSessionId(req.body);
+      const requestPhone = getPhone(req.body);
 
-for (const toolCall of toolCalls) {
-  const args = getToolArguments(toolCall);
+      for (const toolCall of toolCalls) {
+        const args = getToolArguments(toolCall);
 
-  const enrichedArgs = {
-    ...args,
-    sessionId: args.sessionId || requestSessionId,
-    callId: args.callId || requestSessionId,
-    phone: args.phone || requestPhone
-  };
+        const enrichedArgs = {
+          ...args,
+          sessionId: args.sessionId || requestSessionId,
+          callId: args.callId || requestSessionId,
+          phone: args.phone || requestPhone
+        };
 
-  console.log("VAPI TOOL CALL ARGS:", JSON.stringify(enrichedArgs, null, 2));
+        console.log("VAPI TOOL CALL ARGS:", JSON.stringify(enrichedArgs, null, 2));
 
-  const result = await handleAction(enrichedArgs);
+        const result = await handleAction(enrichedArgs);
 
-  results.push({
-    toolCallId: toolCall.id,
-    result: cleanSpeak(result.speak || "Okay.")
-  });
-}
+        results.push({
+          toolCallId: toolCall.id,
+          result: cleanSpeak(result.speak || "Okay.")
+        });
+      }
 
       return res.json({ results });
     }
@@ -1263,6 +1356,9 @@ for (const toolCall of toolCalls) {
       posResult: result.posResult || null,
       transfer: result.transfer || false,
       transferTo: result.transferTo || null,
+      transferMessage: result.transferMessage || null,
+      transferMessages: result.transferMessages || null,
+      count: result.count || null,
       error: result.error || null
     });
   } catch (err) {
