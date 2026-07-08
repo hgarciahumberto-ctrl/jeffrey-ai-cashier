@@ -1,7 +1,6 @@
 // ===============================
-// FLAPS & RACKS AI CASHIER BACKEND V1.6B
-// Cart + Totals + Tucson Tax + Customer Memory + Transfer Intent + Transfer Messages + POS Stub
-// Robust Vapi Input Cleaner + Flow-Safe Validation
+// FLAPS & RACKS AI CASHIER BACKEND V1.6C
+// Canonical ItemId Fix + Empty Cart Finalize Guard
 // ES MODULE VERSION FOR RAILWAY + VAPI
 // ===============================
 
@@ -10,7 +9,7 @@ import express from "express";
 const app = express();
 app.use(express.json({ limit: "1mb" }));
 
-const VERSION = "1.6B-transfer-message-mvp";
+const VERSION = "1.6C-canonical-itemid-fix";
 
 const PORT = process.env.PORT || 3000;
 const TAX_RATE = Number(process.env.TAX_RATE || 0.087);
@@ -337,7 +336,6 @@ function getSessionId(payload = {}) {
     payload.call?.id ||
     payload.message?.call?.id ||
     payload.message?.callId ||
-    payload.message?.call?.id ||
     payload.message?.call?.sid;
 
   if (existing) return existing;
@@ -572,7 +570,23 @@ function extractSideFromText(text = "") {
 }
 
 function normalizeItemIdFromText(text = "") {
-  const t = clean(text);
+  const raw = String(text || "").trim().toLowerCase();
+
+  // CRITICAL FIX V1.6C:
+  // Trust exact backend menu IDs sent by Vapi/OpenAI.
+  // Examples:
+  // combo_chicken_sandwich
+  // combo_buffalo_burger
+  // wings_standalone
+  // mac_bites
+  if (MENU[raw]) return raw;
+
+  // Also support canonical IDs accidentally sent with spaces or hyphens.
+  const rawAsMenuId = raw.replace(/[\s-]+/g, "_");
+  if (MENU[rawAsMenuId]) return rawAsMenuId;
+
+  // Then normalize human text for fuzzy matching.
+  const t = clean(String(text || "").replace(/_/g, " "));
 
   if (t.includes("combo") && t.includes("8") && t.includes("boneless")) return "combo_8_boneless";
   if (t.includes("combo") && t.includes("8") && (t.includes("wing") || t.includes("alita") || t.includes("bone in"))) return "combo_8_wings";
@@ -595,13 +609,19 @@ function normalizeItemIdFromText(text = "") {
   if (t.includes("pork belly")) return "pork_belly";
 
   if (t.includes("full rack")) return "ribs_full";
-  if (t.includes("half rack combo") || t.includes("medio rack combo")) return "combo_half_rack";
+  if (t.includes("half rack") && t.includes("4") && (t.includes("bone") || t.includes("wing"))) return "combo_half_rack_4_bonein";
+  if (t.includes("half rack") && t.includes("combo")) return "combo_half_rack";
+  if (t.includes("medio rack") && t.includes("combo")) return "combo_half_rack";
   if (t.includes("half rack") || t.includes("medio rack")) return "ribs_half";
 
-  if (t.includes("buffalo burger combo")) return "combo_buffalo_burger";
-  if (t.includes("classic burger combo")) return "combo_classic_burger";
-  if (t.includes("chicken sandwich combo")) return "combo_chicken_sandwich";
-  if (t.includes("flyin burger combo") || t.includes("flying burger combo")) return "combo_flyin_burger";
+  if (t.includes("fish") && t.includes("combo")) return "combo_fish";
+
+  // Combo burger/sandwich matching must not depend on exact word order.
+  // This catches both "chicken sandwich combo" and "combo chicken sandwich".
+  if (t.includes("combo") && t.includes("buffalo burger")) return "combo_buffalo_burger";
+  if (t.includes("combo") && t.includes("classic burger")) return "combo_classic_burger";
+  if (t.includes("combo") && t.includes("chicken sandwich")) return "combo_chicken_sandwich";
+  if (t.includes("combo") && (t.includes("flyin burger") || t.includes("flying burger"))) return "combo_flyin_burger";
 
   if (t.includes("buffalo burger")) return "buffalo_burger";
   if (t.includes("classic burger")) return "classic_burger";
@@ -888,6 +908,7 @@ function validateItem(raw = {}) {
       chickenStyle: item.chickenStyle,
       dressing: item.dressing,
       drizzle: item.drizzle,
+      saucePlacement: item.saucePlacement,
       drinkType: item.drinkType,
       cornRibsSauce: item.cornRibsSauce,
       wingSauce: item.wingSauce,
@@ -934,6 +955,7 @@ function itemSummary(item, lang = "en") {
   if (item.sideChoice) parts.push(`${lang === "es" ? "acompañamiento" : "side"} ${item.sideChoice}`);
   if (item.chickenStyle) parts.push(item.chickenStyle);
   if (item.protein) parts.push(item.protein);
+  if (item.modifications?.length) parts.push(`${lang === "es" ? "modificaciones" : "modifications"} ${item.modifications.join(", ")}`);
 
   return parts.join(", ");
 }
@@ -1191,6 +1213,24 @@ async function handleAction(payload = {}) {
   }
 
   if (action === "finalize_order") {
+    if (!cart.items.length) {
+      return {
+        success: false,
+        ok: false,
+        cart,
+        totals: cartTotals(cart.items),
+        error: {
+          code: "EMPTY_CART_FINALIZE_BLOCKED",
+          message: "Cannot finalize an empty cart."
+        },
+        speak: speak(
+          lang,
+          "I don't have any items saved yet. Let me add that first.",
+          "Todavía no tengo artículos guardados. Déjeme agregar eso primero."
+        )
+      };
+    }
+
     const totals = cartTotals(cart.items);
     const orderId = `FR-${Date.now().toString().slice(-6)}`;
 
@@ -1276,6 +1316,16 @@ function getToolArguments(toolCall = {}) {
   return args && typeof args === "object" ? args : {};
 }
 
+function getToolCallId(toolCall = {}) {
+  return (
+    toolCall.id ||
+    toolCall.toolCallId ||
+    toolCall.callId ||
+    toolCall.function?.id ||
+    `tool-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  );
+}
+
 // ===============================
 // ROUTES
 // ===============================
@@ -1320,6 +1370,7 @@ app.post("/order", async (req, res) => {
 
       for (const toolCall of toolCalls) {
         const args = getToolArguments(toolCall);
+        const toolCallId = getToolCallId(toolCall);
 
         const enrichedArgs = {
           ...args,
@@ -1332,8 +1383,18 @@ app.post("/order", async (req, res) => {
 
         const result = await handleAction(enrichedArgs);
 
+        console.log("VAPI TOOL CALL RESULT:", JSON.stringify({
+          toolCallId,
+          success: result.success,
+          ok: result.ok,
+          speak: result.speak,
+          error: result.error || null,
+          item: result.item || null,
+          totals: result.totals || null
+        }, null, 2));
+
         results.push({
-          toolCallId: toolCall.id,
+          toolCallId,
           result: cleanSpeak(result.speak || "Okay.")
         });
       }
@@ -1346,6 +1407,7 @@ app.post("/order", async (req, res) => {
     return res.json({
       success: result.success,
       ok: result.ok,
+      version: VERSION,
       speak: result.speak,
       result: result.speak,
       item: result.item || null,
@@ -1364,9 +1426,12 @@ app.post("/order", async (req, res) => {
   } catch (err) {
     const speakMessage = "Let me confirm that one step at a time.";
 
+    console.error("ORDER ROUTE SERVER ERROR:", err);
+
     return res.json({
       success: false,
       ok: false,
+      version: VERSION,
       speak: speakMessage,
       result: speakMessage,
       error: {
