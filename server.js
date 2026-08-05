@@ -1,5 +1,5 @@
 // ===============================
-// FLAPS & RACKS AI CASHIER BACKEND V1.7
+// FLAPS & RACKS AI CASHIER BACKEND V1.9 FINAL ENGLISH EXTRAS
 // Cart + Totals + Tucson Tax + Customer Memory + Transfer Message + POS Stub
 // Fixes: canonical itemId normalization, final-total-only speak output,
 // empty-cart finalize guard, baked potato dressing/drizzle handling,
@@ -12,11 +12,10 @@ import express from "express";
 const app = express();
 app.use(express.json({ limit: "1mb" }));
 
-const VERSION = "1.8-surgical-menu-alignment";
+const VERSION = "1.9-final-english-extras";
 const PORT = process.env.PORT || 3000;
 const TAX_RATE = Number(process.env.TAX_RATE || 0.087);
-const RESTAURANT_PHONE =
-  process.env.RESTAURANT_PHONE || "+15206582634";
+const RESTAURANT_PHONE = process.env.RESTAURANT_PHONE || "+15206582634";
 const POS_MODE = process.env.POS_MODE || "stub";
 
 const sessions = {};
@@ -46,24 +45,16 @@ const SAUCES = [
   "flavor of the month"
 ];
 
-const DIPS = [
-  "ranch",
-  "blue cheese",
-  "chipotle ranch",
-  "jalapeno ranch"
-];
-
-const NO_DRESSING_VALUES = [
-  "no dressing",
-  "no drizzle",
-  "none"
-];
+const DIPS = ["ranch", "blue cheese", "chipotle ranch", "jalapeno ranch"];
+const NO_DRESSING_VALUES = ["no dressing", "no drizzle", "none"];
 
 const SIDE_CHOICES = [
   "regular fries",
   "sweet potato fries",
   "potato salad",
-  "buffalo ranch fries"
+  "buffalo ranch fries",
+  "tostones",
+  "yuca fries"
 ];
 
 const SIDE_UPGRADES = {
@@ -87,6 +78,33 @@ const BAKED_POTATO_DRESSINGS = [
   "chipotle ranch",
   "jalapeno ranch"
 ];
+
+const EXTRA_TOPPINGS = [
+  "tomato",
+  "lettuce",
+  "pickles",
+  "onion",
+  "mayo",
+  "cilantro",
+  "parmesan",
+  "green chile drizzle",
+  "flyin sauce"
+];
+
+const EXTRA_ITEM_PRICES = {
+  extra_dip: 0.75,
+  extra_sauce: 0.75,
+  extra_topping: 0.75,
+  extra_cheese: 0.75,
+  extra_marinara: 0.75,
+  extra_sour_cream: 0.75,
+  extra_beef_patty: 3.45,
+  extra_grilled_chicken_patty: 3.99,
+  extra_fried_chicken_patty: 3.99,
+  extra_boneless_chicken: 3.99,
+  extra_pork_belly: 5.99,
+  extra_steak: 5.99
+};
 
 const MENU = {
   wings_standalone: {
@@ -315,10 +333,7 @@ const MENU = {
     label: "Chicken Sandwich Combo",
     family: "combo",
     price: 12.35,
-    requiredSlots: [
-      "chickenStyle",
-      "sideChoice"
-    ],
+    requiredSlots: ["chickenStyle", "sideChoice"],
     drinkIncluded: "24oz soft drink"
   },
 
@@ -326,10 +341,7 @@ const MENU = {
     label: "Flyin’ Burger Combo",
     family: "combo",
     price: 16.65,
-    requiredSlots: [
-      "chickenStyle",
-      "sideChoice"
-    ],
+    requiredSlots: ["chickenStyle", "sideChoice"],
     drinkIncluded: "24oz soft drink"
   },
 
@@ -364,10 +376,7 @@ const MENU = {
     label: "Flyin’ Salad",
     family: "salad",
     price: 11.3,
-    requiredSlots: [
-      "chickenStyle",
-      "dressing"
-    ]
+    requiredSlots: ["chickenStyle", "dressing"]
   },
 
   flyin_fries: {
@@ -525,10 +534,105 @@ const MENU = {
     label: "Kids Cheeseburger",
     family: "kids",
     price: 9.25,
-    ingredients: [
-      "cheese",
-      "mayo"
-    ],
+    ingredients: ["cheese", "mayo"],
+    requiredSlots: []
+  },
+
+  side_tostones: {
+    label: "Side of Tostones",
+    family: "side",
+    price: 5.5,
+    requiredSlots: []
+  },
+
+  side_yuca_fries: {
+    label: "Side of Yuca Fries",
+    family: "side",
+    price: 4.99,
+    requiredSlots: []
+  },
+
+  extra_dip: {
+    label: "Extra Dipping Sauce",
+    family: "extra",
+    price: EXTRA_ITEM_PRICES.extra_dip,
+    requiredSlots: ["dips"]
+  },
+
+  extra_sauce: {
+    label: "Extra Sauce",
+    family: "extra",
+    price: EXTRA_ITEM_PRICES.extra_sauce,
+    requiredSlots: ["sauces"]
+  },
+
+  extra_topping: {
+    label: "Extra Topping",
+    family: "extra",
+    price: EXTRA_ITEM_PRICES.extra_topping,
+    requiredSlots: ["extraSelection"]
+  },
+
+  extra_cheese: {
+    label: "Extra Cheese",
+    family: "extra",
+    price: EXTRA_ITEM_PRICES.extra_cheese,
+    requiredSlots: []
+  },
+
+  extra_marinara: {
+    label: "Extra Marinara",
+    family: "extra",
+    price: EXTRA_ITEM_PRICES.extra_marinara,
+    requiredSlots: []
+  },
+
+  extra_sour_cream: {
+    label: "Extra Sour Cream",
+    family: "extra",
+    price: EXTRA_ITEM_PRICES.extra_sour_cream,
+    requiredSlots: []
+  },
+
+  extra_beef_patty: {
+    label: "Extra Beef Patty",
+    family: "extra",
+    price: EXTRA_ITEM_PRICES.extra_beef_patty,
+    requiredSlots: []
+  },
+
+  extra_grilled_chicken_patty: {
+    label: "Extra Grilled Chicken Patty",
+    family: "extra",
+    price: EXTRA_ITEM_PRICES.extra_grilled_chicken_patty,
+    requiredSlots: []
+  },
+
+  extra_fried_chicken_patty: {
+    label: "Extra Fried Chicken Patty",
+    family: "extra",
+    price: EXTRA_ITEM_PRICES.extra_fried_chicken_patty,
+    requiredSlots: []
+  },
+
+  extra_boneless_chicken: {
+    label: "Extra Boneless Chicken",
+    family: "extra",
+    price: EXTRA_ITEM_PRICES.extra_boneless_chicken,
+    requiredSlots: []
+  },
+
+  extra_pork_belly: {
+    label: "Extra Pork Belly",
+    family: "extra",
+    price: EXTRA_ITEM_PRICES.extra_pork_belly,
+    requiredSlots: []
+  },
+
+  extra_steak: {
+    label: "Extra Steak",
+    family: "extra",
+    price: EXTRA_ITEM_PRICES.extra_steak,
     requiredSlots: []
   },
 
@@ -575,18 +679,13 @@ function cleanSpeak(value = "") {
 }
 
 function money(value) {
-  return Number(
-    Number(value || 0).toFixed(2)
-  );
+  return Number(Number(value || 0).toFixed(2));
 }
 
 function asArray(value) {
   if (Array.isArray(value)) {
     return value.filter(
-      (x) =>
-        x !== "" &&
-        x !== null &&
-        x !== undefined
+      (x) => x !== "" && x !== null && x !== undefined
     );
   }
 
@@ -606,9 +705,7 @@ function speak(lang, en, es) {
 }
 
 function getLanguage(payload = {}) {
-  return clean(
-    payload.language || payload.lang
-  ) === "es"
+  return clean(payload.language || payload.lang) === "es"
     ? "es"
     : "en";
 }
@@ -655,10 +752,7 @@ function ensureSession(sessionId, phone = "") {
     };
   }
 
-  if (
-    phone &&
-    !sessions[sessionId].phone
-  ) {
+  if (phone && !sessions[sessionId].phone) {
     sessions[sessionId].phone = phone;
   }
 
@@ -680,51 +774,37 @@ function normalizeSauce(value = "") {
     "barbecue sauce": "barbeque",
     "bbq sauce": "barbeque",
     barbiquiu: "barbeque",
-
     mild: "buffalo mild",
     "buffalo mild": "buffalo mild",
     "buffalo mild sauce": "buffalo mild",
-
     hot: "buffalo hot",
     "buffalo hot": "buffalo hot",
     "buffalo hot sauce": "buffalo hot",
-
     "lemon pepper": "lemon pepper",
     "lime pepper": "lime pepper",
     "laim pepper": "lime pepper",
-
     "green chili": "green chile",
     "green chile": "green chile",
-
     "bbq chiltepin": "barbeque chiltepin",
     "barbeque chiltepin": "barbeque chiltepin",
     "barbecue chiltepin": "barbeque chiltepin",
     "chiltepin bbq": "barbeque chiltepin",
-
     "garlic parm": "garlic parmesan",
     "garlic parmesan": "garlic parmesan",
-    "garlic parmesan sauce":
-      "garlic parmesan",
-
+    "garlic parmesan sauce": "garlic parmesan",
     teriyaki: "teriyaki",
     "teriyaki sauce": "teriyaki",
     teriaki: "teriyaki",
     teriyake: "teriyaki",
-
     "al pastor": "al pastor",
     chorizo: "chorizo",
-    "chocolate chiltepin":
-      "chocolate chiltepin",
+    "chocolate chiltepin": "chocolate chiltepin",
     "cinnamon roll": "cinnamon roll",
     "citrus chipotle": "citrus chipotle",
-
     "mango habanero": "mango habanero",
-    "mango habanero sauce":
-      "mango habanero",
-
+    "mango habanero sauce": "mango habanero",
     pizza: "pizza",
-    "flavor of the month":
-      "flavor of the month"
+    "flavor of the month": "flavor of the month"
   };
 
   return map[sauce] || sauce;
@@ -736,19 +816,13 @@ function normalizeDip(value = "") {
   const map = {
     ranch: "ranch",
     "ranch dressing": "ranch",
-
     "blue cheese": "blue cheese",
-    "blue cheese dressing":
-      "blue cheese",
+    "blue cheese dressing": "blue cheese",
     "blu chis": "blue cheese",
-
     "chipotle ranch": "chipotle ranch",
-    "chipotle ranch dressing":
-      "chipotle ranch",
-
+    "chipotle ranch dressing": "chipotle ranch",
     "jalapeno ranch": "jalapeno ranch",
-    "jalapeno ranch dressing":
-      "jalapeno ranch",
+    "jalapeno ranch dressing": "jalapeno ranch",
     "jalapeño ranch": "jalapeno ranch"
   };
 
@@ -787,22 +861,17 @@ function normalizeSide(value = "") {
     papas: "regular fries",
     "regular fries": "regular fries",
     "papas regulares": "regular fries",
-
-    "sweet potato fries":
-      "sweet potato fries",
-    "sweet fries":
-      "sweet potato fries",
-    "papas de camote":
-      "sweet potato fries",
-
+    "sweet potato fries": "sweet potato fries",
+    "sweet fries": "sweet potato fries",
+    "papas de camote": "sweet potato fries",
     "potato salad": "potato salad",
-    "ensalada de papa":
-      "potato salad",
-
-    "buffalo ranch fries":
-      "buffalo ranch fries",
-    "buffalo fries":
-      "buffalo ranch fries"
+    "ensalada de papa": "potato salad",
+    "buffalo ranch fries": "buffalo ranch fries",
+    "buffalo fries": "buffalo ranch fries",
+    tostones: "tostones",
+    "fried plantains": "tostones",
+    "yuca fries": "yuca fries",
+    yuca: "yuca fries"
   };
 
   return map[side] || side;
@@ -877,9 +946,7 @@ function normalizeSaucePlacement(
     return "on top";
   }
 
-  if (
-    itemId === "combo_baked_potato"
-  ) {
+  if (itemId === "combo_baked_potato") {
     return "on top";
   }
 
@@ -888,18 +955,12 @@ function normalizeSaucePlacement(
 
 function detectQuantity(text = "") {
   const t = phraseKey(text);
-  const match = t.match(
-    /\b(48|24|18|12|9|8|6|4)\b/
-  );
+  const match = t.match(/\b(48|24|18|12|9|8|6|4)\b/);
 
-  return match
-    ? Number(match[1])
-    : 0;
+  return match ? Number(match[1]) : 0;
 }
 
-function extractSaucesFromText(
-  text = ""
-) {
+function extractSaucesFromText(text = "") {
   const t = phraseKey(text);
   const found = [];
 
@@ -931,20 +992,11 @@ function extractSaucesFromText(
     "hot"
   ];
 
-  for (
-    const phrase of saucePhrases
-  ) {
-    if (
-      t.includes(
-        phraseKey(phrase)
-      )
-    ) {
-      const normalized =
-        normalizeSauce(phrase);
+  for (const phrase of saucePhrases) {
+    if (t.includes(phraseKey(phrase))) {
+      const normalized = normalizeSauce(phrase);
 
-      if (
-        !found.includes(normalized)
-      ) {
+      if (!found.includes(normalized)) {
         found.push(normalized);
       }
     }
@@ -953,9 +1005,7 @@ function extractSaucesFromText(
   return found;
 }
 
-function extractDipsFromText(
-  text = ""
-) {
+function extractDipsFromText(text = "") {
   const t = phraseKey(text);
   const found = [];
 
@@ -967,20 +1017,11 @@ function extractDipsFromText(
     "ranch"
   ];
 
-  for (
-    const phrase of dipPhrases
-  ) {
-    if (
-      t.includes(
-        phraseKey(phrase)
-      )
-    ) {
-      const normalized =
-        normalizeDip(phrase);
+  for (const phrase of dipPhrases) {
+    if (t.includes(phraseKey(phrase))) {
+      const normalized = normalizeDip(phrase);
 
-      if (
-        !found.includes(normalized)
-      ) {
+      if (!found.includes(normalized)) {
         found.push(normalized);
       }
     }
@@ -989,17 +1030,25 @@ function extractDipsFromText(
   return found;
 }
 
-function extractSideFromText(
-  text = ""
-) {
+function extractSideFromText(text = "") {
   const t = phraseKey(text);
 
-  if (
-    t.includes(
-      "buffalo ranch fries"
-    )
-  ) {
+  if (t.includes("buffalo ranch fries")) {
     return "buffalo ranch fries";
+  }
+
+  if (
+    t.includes("tostones") ||
+    t.includes("fried plantains")
+  ) {
+    return "tostones";
+  }
+
+  if (
+    t.includes("yuca fries") ||
+    t.includes("yuca")
+  ) {
+    return "yuca fries";
   }
 
   if (
@@ -1026,51 +1075,32 @@ function extractSideFromText(
   return "";
 }
 
-function normalizeItemId(
-  value = ""
-) {
-  const raw =
-    String(value || "").trim();
+function normalizeItemId(value = "") {
+  const raw = String(value || "").trim();
 
   if (MENU[raw]) {
     return raw;
   }
 
-  const underscoreCandidate =
-    phraseKey(raw).replace(
-      /\s+/g,
-      "_"
-    );
+  const underscoreCandidate = phraseKey(raw)
+    .replace(/\s+/g, "_");
 
-  if (
-    MENU[underscoreCandidate]
-  ) {
+  if (MENU[underscoreCandidate]) {
     return underscoreCandidate;
   }
 
-  return normalizeItemIdFromText(
-    raw
-  );
+  return normalizeItemIdFromText(raw);
 }
 
-function normalizeItemIdFromText(
-  text = ""
-) {
+function normalizeItemIdFromText(text = "") {
   const t = phraseKey(text);
 
   if (!t) {
     return "";
   }
 
-  if (
-    MENU[
-      t.replace(/\s+/g, "_")
-    ]
-  ) {
-    return t.replace(
-      /\s+/g,
-      "_"
-    );
+  if (MENU[t.replace(/\s+/g, "_")]) {
+    return t.replace(/\s+/g, "_");
   }
 
   if (
@@ -1120,27 +1150,15 @@ function normalizeItemIdFromText(
     return "combo_fish";
   }
 
-  if (
-    t.includes(
-      "buffalo burger combo"
-    )
-  ) {
+  if (t.includes("buffalo burger combo")) {
     return "combo_buffalo_burger";
   }
 
-  if (
-    t.includes(
-      "classic burger combo"
-    )
-  ) {
+  if (t.includes("classic burger combo")) {
     return "combo_classic_burger";
   }
 
-  if (
-    t.includes(
-      "chicken sandwich combo"
-    )
-  ) {
+  if (t.includes("chicken sandwich combo")) {
     return "combo_chicken_sandwich";
   }
 
@@ -1152,14 +1170,89 @@ function normalizeItemIdFromText(
   }
 
   if (
-    t.includes("baked potato")
+    t.includes("extra dipping sauce") ||
+    t.includes("extra dip")
   ) {
-    return "combo_baked_potato";
+    return "extra_dip";
+  }
+
+  if (t.includes("extra sauce")) {
+    return "extra_sauce";
+  }
+
+  if (t.includes("extra beef patty")) {
+    return "extra_beef_patty";
+  }
+
+  if (t.includes("extra grilled chicken patty")) {
+    return "extra_grilled_chicken_patty";
+  }
+
+  if (t.includes("extra fried chicken patty")) {
+    return "extra_fried_chicken_patty";
   }
 
   if (
-    t.includes("boneless")
+    t.includes("extra boneless chicken") ||
+    t.includes("extra boneless")
   ) {
+    return "extra_boneless_chicken";
+  }
+
+  if (t.includes("extra pork belly")) {
+    return "extra_pork_belly";
+  }
+
+  if (t.includes("extra steak")) {
+    return "extra_steak";
+  }
+
+  if (t.includes("extra cheese")) {
+    return "extra_cheese";
+  }
+
+  if (t.includes("extra marinara")) {
+    return "extra_marinara";
+  }
+
+  if (t.includes("extra sour cream")) {
+    return "extra_sour_cream";
+  }
+
+  if (
+    t.includes("extra topping") ||
+    t.includes("extra tomato") ||
+    t.includes("extra lettuce") ||
+    t.includes("extra pickles") ||
+    t.includes("extra onion") ||
+    t.includes("extra mayo") ||
+    t.includes("extra cilantro") ||
+    t.includes("extra parmesan") ||
+    t.includes("extra green chile drizzle") ||
+    t.includes("extra flyin sauce")
+  ) {
+    return "extra_topping";
+  }
+
+  if (
+    t.includes("side of tostones") ||
+    t === "tostones"
+  ) {
+    return "side_tostones";
+  }
+
+  if (
+    t.includes("side of yuca") ||
+    t.includes("yuca fries")
+  ) {
+    return "side_yuca_fries";
+  }
+
+  if (t.includes("baked potato")) {
+    return "combo_baked_potato";
+  }
+
+  if (t.includes("boneless")) {
     return "boneless_standalone";
   }
 
@@ -1173,21 +1266,15 @@ function normalizeItemIdFromText(
     return "wings_standalone";
   }
 
-  if (
-    t.includes("pork belly fries")
-  ) {
+  if (t.includes("pork belly fries")) {
     return "pork_belly_fries";
   }
 
-  if (
-    t.includes("pork belly")
-  ) {
+  if (t.includes("pork belly")) {
     return "pork_belly";
   }
 
-  if (
-    t.includes("full rack")
-  ) {
+  if (t.includes("full rack")) {
     return "ribs_full";
   }
 
@@ -1198,21 +1285,15 @@ function normalizeItemIdFromText(
     return "ribs_half";
   }
 
-  if (
-    t.includes("buffalo burger")
-  ) {
+  if (t.includes("buffalo burger")) {
     return "buffalo_burger";
   }
 
-  if (
-    t.includes("classic burger")
-  ) {
+  if (t.includes("classic burger")) {
     return "classic_burger";
   }
 
-  if (
-    t.includes("chicken sandwich")
-  ) {
+  if (t.includes("chicken sandwich")) {
     return "chicken_sandwich";
   }
 
@@ -1230,78 +1311,52 @@ function normalizeItemIdFromText(
     return "flyin_salad";
   }
 
-  if (
-    t.includes("house salad")
-  ) {
+  if (t.includes("house salad")) {
     return "house_salad";
   }
 
-  if (
-    t.includes(
-      "chicken parmesan fries"
-    )
-  ) {
+  if (t.includes("chicken parmesan fries")) {
     return "chicken_parmesan_fries";
   }
 
-  if (
-    t.includes("pork belly fries")
-  ) {
+  if (t.includes("pork belly fries")) {
     return "pork_belly_fries";
   }
 
   if (
     t.includes("jr flyin fries") ||
-    t.includes(
-      "junior flyin fries"
-    ) ||
+    t.includes("junior flyin fries") ||
     t.includes("flyin fries") ||
     t.includes("flying fries")
   ) {
     return "flyin_fries";
   }
 
-  if (
-    t.includes(
-      "buffalo ranch fries"
-    )
-  ) {
+  if (t.includes("buffalo ranch fries")) {
     return "buffalo_ranch_fries";
   }
 
-  if (
-    t.includes("mac bites")
-  ) {
+  if (t.includes("mac bites")) {
     return "mac_bites";
   }
 
-  if (
-    t.includes("mozzarella")
-  ) {
+  if (t.includes("mozzarella")) {
     return "mozzarella_sticks";
   }
 
-  if (
-    t.includes("onion rings")
-  ) {
+  if (t.includes("onion rings")) {
     return "onion_rings";
   }
 
-  if (
-    t.includes("corn ribs")
-  ) {
+  if (t.includes("corn ribs")) {
     return "corn_ribs";
   }
 
-  if (
-    t.includes("flyin corn")
-  ) {
+  if (t.includes("flyin corn")) {
     return "flyin_corn";
   }
 
-  if (
-    t.includes("sampler")
-  ) {
+  if (t.includes("sampler")) {
     return "sampler_platter";
   }
 
@@ -1329,17 +1384,11 @@ function normalizeItemIdFromText(
     return "kids_cheeseburger";
   }
 
-  if (
-    t.includes(
-      "sweet potato fries"
-    )
-  ) {
+  if (t.includes("sweet potato fries")) {
     return "sweet_potato_fries";
   }
 
-  if (
-    t.includes("potato salad")
-  ) {
+  if (t.includes("potato salad")) {
     return "potato_salad";
   }
 
@@ -1390,9 +1439,7 @@ function normalizeWingPreference(
   return "";
 }
 
-function normalizePayload(
-  raw = {}
-) {
+function normalizePayload(raw = {}) {
   const combinedText = [
     raw.text,
     raw.item,
@@ -1405,27 +1452,17 @@ function normalizePayload(
     .join(" ");
 
   const itemId =
-    normalizeItemId(
-      raw.itemId || ""
-    ) ||
-    normalizeItemId(
-      raw.item || ""
-    ) ||
-    normalizeItemIdFromText(
-      combinedText
-    );
+    normalizeItemId(raw.itemId || "") ||
+    normalizeItemId(raw.item || "") ||
+    normalizeItemIdFromText(combinedText);
 
   const def = MENU[itemId] || {};
 
-  const saucesFromFields =
-    asArray(raw.sauces).map(
-      normalizeSauce
-    );
+  const saucesFromFields = asArray(raw.sauces)
+    .map(normalizeSauce);
 
   const saucesFromText =
-    extractSaucesFromText(
-      combinedText
-    );
+    extractSaucesFromText(combinedText);
 
   const sauces = [
     ...new Set([
@@ -1434,15 +1471,11 @@ function normalizePayload(
     ])
   ].filter(Boolean);
 
-  const dipsFromFields =
-    asArray(raw.dips).map(
-      normalizeDip
-    );
+  const dipsFromFields = asArray(raw.dips)
+    .map(normalizeDip);
 
   const dipsFromText =
-    extractDipsFromText(
-      combinedText
-    );
+    extractDipsFromText(combinedText);
 
   const dips = [
     ...new Set([
@@ -1451,37 +1484,18 @@ function normalizePayload(
     ])
   ].filter(Boolean);
 
-  const rawDressing =
-    raw.dressing || "";
+  const rawDressing = raw.dressing || "";
+  const rawDrizzle = raw.drizzle || "";
 
-  const rawDrizzle =
-    raw.drizzle || "";
+  let dressing = normalizeDressing(rawDressing);
+  let drizzle = normalizeDressing(rawDrizzle);
 
-  let dressing =
-    normalizeDressing(
-      rawDressing
-    );
-
-  let drizzle =
-    normalizeDressing(
-      rawDrizzle
-    );
-
-  if (
-    itemId ===
-    "combo_baked_potato"
-  ) {
-    if (
-      !drizzle &&
-      dressing
-    ) {
+  if (itemId === "combo_baked_potato") {
+    if (!drizzle && dressing) {
       drizzle = dressing;
     }
 
-    if (
-      !dressing &&
-      drizzle
-    ) {
+    if (!dressing && drizzle) {
       dressing = drizzle;
     }
 
@@ -1495,95 +1509,79 @@ function normalizePayload(
     }
   }
 
-  const sideChoice =
-    raw.sideChoice
-      ? normalizeSide(
-          raw.sideChoice
-        )
-      : extractSideFromText(
-          combinedText
-        );
+  const sideChoice = raw.sideChoice
+    ? normalizeSide(raw.sideChoice)
+    : extractSideFromText(combinedText);
 
-  const quantity =
-    def.pricesByQuantity
-      ? Number(
-          raw.quantity ||
-            detectQuantity(
-              combinedText
-            ) ||
-            0
+  const quantity = def.pricesByQuantity
+    ? Number(
+        raw.quantity ||
+        detectQuantity(combinedText) ||
+        0
+      )
+    : def.family === "extra"
+      ? Math.max(
+          1,
+          Number(raw.quantity || 1)
         )
       : 0;
 
-  const modifications =
-    asArray(
-      raw.modifications
-    )
-      .map(String)
-      .filter(Boolean);
+  const modifications = asArray(
+    raw.modifications
+  )
+    .map(String)
+    .filter(Boolean);
 
-  const wingPreference =
-    normalizeWingPreference(
-      {
-        ...raw,
-        modifications
-      },
-      combinedText
-    );
+  const wingPreference = normalizeWingPreference(
+    {
+      ...raw,
+      modifications
+    },
+    combinedText
+  );
 
   return {
     ...raw,
-    language:
-      getLanguage(raw),
+    language: getLanguage(raw),
     itemId,
     quantity,
     sauces,
     dips,
     sideChoice,
-    protein:
-      raw.protein
-        ? normalizeProtein(
-            raw.protein
-          )
-        : "",
-    chickenStyle:
-      raw.chickenStyle
-        ? normalizeChickenStyle(
-            raw.chickenStyle
-          )
-        : "",
-    drinkType:
-      raw.drinkType
-        ? normalizeDrinkType(
-            raw.drinkType
-          )
-        : "",
+    protein: raw.protein
+      ? normalizeProtein(raw.protein)
+      : "",
+    chickenStyle: raw.chickenStyle
+      ? normalizeChickenStyle(raw.chickenStyle)
+      : "",
+    drinkType: raw.drinkType
+      ? normalizeDrinkType(raw.drinkType)
+      : "",
     dressing,
     drizzle,
-    saucePlacement:
-      normalizeSaucePlacement(
-        raw.saucePlacement,
-        itemId
-      ),
-    cornRibsSauce:
-      raw.cornRibsSauce
-        ? normalizeSauce(
-            raw.cornRibsSauce
-          )
-        : "",
-    wingSauce:
-      raw.wingSauce
-        ? normalizeSauce(
-            raw.wingSauce
-          )
-        : "",
-    wingDip:
-      raw.wingDip
-        ? normalizeDip(
-            raw.wingDip
-          )
-        : "",
+    saucePlacement: normalizeSaucePlacement(
+      raw.saucePlacement,
+      itemId
+    ),
+    cornRibsSauce: raw.cornRibsSauce
+      ? normalizeSauce(raw.cornRibsSauce)
+      : "",
+    wingSauce: raw.wingSauce
+      ? normalizeSauce(raw.wingSauce)
+      : "",
+    wingDip: raw.wingDip
+      ? normalizeDip(raw.wingDip)
+      : "",
     wingPreference,
+    extraSelection: phraseKey(
+      raw.extraSelection ||
+      raw.selection ||
+      (
+        itemId === "extra_topping"
+          ? modifications[0] || ""
+          : ""
+      )
+    ),
     modifications
   };
 }
@@ -1600,21 +1598,16 @@ function fail(
   return {
     success: false,
     ok: false,
-    speak:
-      cleanSpeak(message),
+    speak: cleanSpeak(message),
     error: {
       code,
-      message:
-        cleanSpeak(message),
+      message: cleanSpeak(message),
       details
     }
   };
 }
 
-function missingSlotMessage(
-  slot,
-  lang
-) {
+function missingSlotMessage(slot, lang) {
   const messages = {
     quantity: speak(
       lang,
@@ -1686,6 +1679,12 @@ function missingSlotMessage(
       lang,
       "What dip would you like for the wings?",
       "¿Qué aderezo quieres para las alitas?"
+    ),
+
+    extraSelection: speak(
+      lang,
+      "Which extra topping would you like?",
+      "¿Qué ingrediente extra quieres?"
     )
   };
 
@@ -1699,168 +1698,123 @@ function missingSlotMessage(
   );
 }
 
-function slotMissing(
-  item,
-  slot
-) {
-  if (
-    slot === "quantity"
-  ) {
+function slotMissing(item, slot) {
+  if (slot === "quantity") {
     return !item.quantity;
   }
 
-  if (
-    slot === "sauces"
-  ) {
+  if (slot === "sauces") {
     return (
       item.sauces.length === 0 &&
-      item.saucePlacement !==
-        "no sauce"
+      item.saucePlacement !== "no sauce"
     );
   }
 
-  if (
-    slot === "dips"
-  ) {
-    return (
-      item.dips.length === 0
-    );
+  if (slot === "dips") {
+    return item.dips.length === 0;
   }
 
-  if (
-    slot === "sideChoice"
-  ) {
+  if (slot === "sideChoice") {
     return !item.sideChoice;
   }
 
-  if (
-    slot === "protein"
-  ) {
+  if (slot === "protein") {
     return !item.protein;
   }
 
-  if (
-    slot === "chickenStyle"
-  ) {
+  if (slot === "chickenStyle") {
     return !item.chickenStyle;
   }
 
-  if (
-    slot === "drinkType"
-  ) {
+  if (slot === "drinkType") {
     return !item.drinkType;
   }
 
-  if (
-    slot === "dressing"
-  ) {
+  if (slot === "dressing") {
     return !item.dressing;
   }
 
-  if (
-    slot === "drizzle"
-  ) {
+  if (slot === "drizzle") {
     return !item.drizzle;
   }
 
-  if (
-    slot === "cornRibsSauce"
-  ) {
+  if (slot === "cornRibsSauce") {
     return !item.cornRibsSauce;
   }
 
-  if (
-    slot === "wingSauce"
-  ) {
+  if (slot === "wingSauce") {
     return !item.wingSauce;
   }
 
-  if (
-    slot === "wingDip"
-  ) {
+  if (slot === "wingDip") {
     return !item.wingDip;
+  }
+
+  if (slot === "extraSelection") {
+    return !item.extraSelection;
   }
 
   return false;
 }
 
-function validateRequiredSlots(
-  item,
-  def
-) {
+function validateRequiredSlots(item, def) {
   const missing = [];
 
-  for (
-    const slot of
-    def.requiredSlots || []
-  ) {
-    if (
-      slotMissing(
-        item,
-        slot
-      )
-    ) {
+  for (const slot of def.requiredSlots || []) {
+    if (slotMissing(item, slot)) {
       missing.push(slot);
     }
   }
 
   if (
-    item.itemId ===
-      "combo_baked_potato" &&
-    item.protein ===
-      "chicken" &&
+    item.itemId === "combo_baked_potato" &&
+    item.protein === "chicken" &&
     !item.chickenStyle
   ) {
-    missing.push(
-      "chickenStyle"
-    );
+    missing.push("chickenStyle");
   }
 
-  return [
-    ...new Set(missing)
-  ];
+  return [...new Set(missing)];
 }
 
-function itemPrice(
-  item,
-  def
-) {
-  if (
-    def.pricesByQuantity
-  ) {
+function itemPrice(item, def) {
+  if (def.pricesByQuantity) {
     return money(
-      def.pricesByQuantity[
-        item.quantity
-      ]
+      def.pricesByQuantity[item.quantity]
     );
   }
 
-  if (
-    def.pricesByProtein
-  ) {
+  if (def.pricesByProtein) {
     return money(
-      def.pricesByProtein[
-        item.protein
-      ]
+      def.pricesByProtein[item.protein]
     );
   }
 
-  return money(
-    def.price || 0
-  );
+  if (def.family === "extra") {
+    return money(
+      (def.price || 0) *
+      Math.max(
+        1,
+        Number(item.quantity || 1)
+      )
+    );
+  }
+
+  return money(def.price || 0);
 }
 
-function validateItem(
-  raw = {}
-) {
-  const item =
-    normalizePayload(raw);
+function validateItem(raw = {}) {
+  const item = normalizePayload(raw);
 
-  const lang =
-    item.language;
+  if (
+    item.itemId === "combo_fish" &&
+    !item.sideChoice
+  ) {
+    item.sideChoice = "regular fries";
+  }
 
-  const def =
-    MENU[item.itemId];
+  const lang = item.language;
+  const def = MENU[item.itemId];
 
   if (!def) {
     return fail(
@@ -1872,18 +1826,14 @@ function validateItem(
       ),
       [
         raw.itemId ||
-          raw.item ||
-          raw.text ||
-          ""
+        raw.item ||
+        raw.text ||
+        ""
       ]
     );
   }
 
-  if (
-    item.sauces.includes(
-      "lemon pepper"
-    )
-  ) {
+  if (item.sauces.includes("lemon pepper")) {
     return fail(
       "CORRECTION_REQUIRED",
       speak(
@@ -1895,11 +1845,10 @@ function validateItem(
     );
   }
 
-  const missing =
-    validateRequiredSlots(
-      item,
-      def
-    );
+  const missing = validateRequiredSlots(
+    item,
+    def
+  );
 
   if (missing.length) {
     return fail(
@@ -1912,13 +1861,43 @@ function validateItem(
     );
   }
 
-  for (
-    const sauce of
-    item.sauces
+  if (
+    def.family === "extra" &&
+    (
+      !Number.isInteger(item.quantity) ||
+      item.quantity < 1
+    )
   ) {
-    if (
-      !SAUCES.includes(sauce)
-    ) {
+    return fail(
+      "INVALID_EXTRA_QUANTITY",
+      speak(
+        lang,
+        "How many would you like?",
+        "¿Cuántos quieres?"
+      ),
+      [item.quantity]
+    );
+  }
+
+  if (
+    item.itemId === "extra_topping" &&
+    !EXTRA_TOPPINGS.includes(
+      item.extraSelection
+    )
+  ) {
+    return fail(
+      "INVALID_EXTRA_TOPPING",
+      speak(
+        lang,
+        "Available extra toppings are tomato, lettuce, pickles, onion, mayo, cilantro, parmesan, green chile drizzle, or Flyin sauce.",
+        "Los ingredientes extra disponibles son tomate, lechuga, pepinillos, cebolla, mayonesa, cilantro, parmesano, green chile drizzle o Flyin sauce."
+      ),
+      [item.extraSelection]
+    );
+  }
+
+  for (const sauce of item.sauces) {
+    if (!SAUCES.includes(sauce)) {
       return fail(
         "INVALID_SAUCE",
         speak(
@@ -1931,13 +1910,8 @@ function validateItem(
     }
   }
 
-  for (
-    const dip of
-    item.dips
-  ) {
-    if (
-      !DIPS.includes(dip)
-    ) {
+  for (const dip of item.dips) {
+    if (!DIPS.includes(dip)) {
       return fail(
         "INVALID_DIP",
         speak(
@@ -1950,20 +1924,15 @@ function validateItem(
     }
   }
 
-  const dipLikeValues = [
-    item.dressing,
-    item.drizzle,
-    item.wingDip
-  ].filter(Boolean);
-
   for (
-    const dipLike of
-    dipLikeValues
+    const dipLike of [
+      item.dressing,
+      item.drizzle,
+      item.wingDip
+    ].filter(Boolean)
   ) {
     if (
-      !DIPS.includes(
-        dipLike
-      ) &&
+      !DIPS.includes(dipLike) &&
       !NO_DRESSING_VALUES.includes(
         dipLike
       )
@@ -1981,8 +1950,7 @@ function validateItem(
   }
 
   if (
-    item.itemId ===
-    "combo_baked_potato"
+    item.itemId === "combo_baked_potato"
   ) {
     const bakedPotatoDressing =
       item.drizzle ||
@@ -2004,18 +1972,14 @@ function validateItem(
           "For the baked potato, the dressing choices are ranch, chipotle ranch, or jalapeno ranch.",
           "Para la papa, los aderezos son ranch, chipotle ranch o jalapeño ranch."
         ),
-        [
-          bakedPotatoDressing
-        ]
+        [bakedPotatoDressing]
       );
     }
   }
 
   if (
     item.wingSauce &&
-    !SAUCES.includes(
-      item.wingSauce
-    )
+    !SAUCES.includes(item.wingSauce)
   ) {
     return fail(
       "INVALID_WING_SAUCE",
@@ -2041,17 +2005,13 @@ function validateItem(
         `I do not have ${item.cornRibsSauce} as a sauce. What sauce would you like for the corn ribs?`,
         `No tengo ${item.cornRibsSauce} como salsa. ¿Qué salsa quieres para los corn ribs?`
       ),
-      [
-        item.cornRibsSauce
-      ]
+      [item.cornRibsSauce]
     );
   }
 
   if (
     def.pricesByQuantity &&
-    !def.pricesByQuantity[
-      item.quantity
-    ]
+    !def.pricesByQuantity[item.quantity]
   ) {
     return fail(
       "INVALID_QUANTITY",
@@ -2066,9 +2026,7 @@ function validateItem(
 
   if (
     def.pricesByProtein &&
-    !def.pricesByProtein[
-      item.protein
-    ]
+    !def.pricesByProtein[item.protein]
   ) {
     return fail(
       "INVALID_PROTEIN",
@@ -2082,6 +2040,7 @@ function validateItem(
   }
 
   if (
+    def.family !== "extra" &&
     def.sauceLimitByQuantity
   ) {
     const limit =
@@ -2089,10 +2048,7 @@ function validateItem(
         item.quantity
       ];
 
-    if (
-      item.sauces.length >
-      limit
-    ) {
+    if (item.sauces.length > limit) {
       return fail(
         "TOO_MANY_SAUCES",
         speak(
@@ -2106,6 +2062,7 @@ function validateItem(
   }
 
   if (
+    def.family !== "extra" &&
     def.dipLimitByQuantity
   ) {
     const limit =
@@ -2113,10 +2070,7 @@ function validateItem(
         item.quantity
       ];
 
-    if (
-      item.dips.length >
-      limit
-    ) {
+    if (item.dips.length > limit) {
       return fail(
         "TOO_MANY_DIPS",
         speak(
@@ -2130,10 +2084,9 @@ function validateItem(
   }
 
   if (
-    def.sauceLimit !==
-      undefined &&
-    item.sauces.length >
-      def.sauceLimit
+    def.family !== "extra" &&
+    def.sauceLimit !== undefined &&
+    item.sauces.length > def.sauceLimit
   ) {
     return fail(
       "TOO_MANY_SAUCES",
@@ -2147,10 +2100,9 @@ function validateItem(
   }
 
   if (
-    def.dipLimit !==
-      undefined &&
-    item.dips.length >
-      def.dipLimit
+    def.family !== "extra" &&
+    def.dipLimit !== undefined &&
+    item.dips.length > def.dipLimit
   ) {
     return fail(
       "TOO_MANY_DIPS",
@@ -2173,8 +2125,8 @@ function validateItem(
       "INVALID_SIDE",
       speak(
         lang,
-        "Side choices are regular fries, sweet potato fries, potato salad, or buffalo ranch fries.",
-        "Los acompañamientos son papas regulares, papas de camote, ensalada de papa o buffalo ranch fries."
+        "Side choices are regular fries, sweet potato fries, potato salad, buffalo ranch fries, tostones, or yuca fries.",
+        "Los acompañamientos son papas regulares, papas de camote, ensalada de papa, buffalo ranch fries, tostones o yuca fries."
       ),
       [item.sideChoice]
     );
@@ -2183,9 +2135,7 @@ function validateItem(
   const extraCharges = [];
 
   if (
-    Array.isArray(
-      def.extraCharges
-    )
+    Array.isArray(def.extraCharges)
   ) {
     extraCharges.push(
       ...def.extraCharges
@@ -2194,9 +2144,7 @@ function validateItem(
 
   if (
     item.sideChoice &&
-    SIDE_UPGRADES[
-      item.sideChoice
-    ]
+    SIDE_UPGRADES[item.sideChoice]
   ) {
     extraCharges.push({
       label:
@@ -2213,9 +2161,7 @@ function validateItem(
     [
       "all flats",
       "all drums"
-    ].includes(
-      item.wingPreference
-    )
+    ].includes(item.wingPreference)
   ) {
     let preferenceCharge = 0;
 
@@ -2239,34 +2185,27 @@ function validateItem(
           ] || 0;
     }
 
-    if (
-      preferenceCharge > 0
-    ) {
+    if (preferenceCharge > 0) {
       extraCharges.push({
-        label:
-          item.wingPreference,
-        amount:
-          preferenceCharge
+        label: item.wingPreference,
+        amount: preferenceCharge
       });
     }
   }
 
   const basePrice =
-    itemPrice(
-      item,
-      def
-    );
+    itemPrice(item, def);
 
   const itemTotal = money(
     basePrice +
-      extraCharges.reduce(
-        (sum, charge) =>
-          sum +
-          Number(
-            charge.amount || 0
-          ),
-        0
-      )
+    extraCharges.reduce(
+      (sum, charge) =>
+        sum +
+        Number(
+          charge.amount || 0
+        ),
+      0
+    )
   );
 
   return {
@@ -2278,40 +2217,29 @@ function validateItem(
       "Perfecto, lo tengo."
     ),
     item: {
-      itemId:
-        item.itemId,
-      label:
-        def.label,
-      family:
-        def.family,
-      quantity:
-        item.quantity,
-      sauces:
-        item.sauces,
-      dips:
-        item.dips,
-      sideChoice:
-        item.sideChoice,
-      protein:
-        item.protein,
+      itemId: item.itemId,
+      label: def.label,
+      family: def.family,
+      quantity: item.quantity,
+      sauces: item.sauces,
+      dips: item.dips,
+      sideChoice: item.sideChoice,
+      protein: item.protein,
       chickenStyle:
         item.chickenStyle,
-      dressing:
-        item.dressing,
-      drizzle:
-        item.drizzle,
+      dressing: item.dressing,
+      drizzle: item.drizzle,
       saucePlacement:
         item.saucePlacement,
-      drinkType:
-        item.drinkType,
+      drinkType: item.drinkType,
       cornRibsSauce:
         item.cornRibsSauce,
-      wingSauce:
-        item.wingSauce,
-      wingDip:
-        item.wingDip,
+      wingSauce: item.wingSauce,
+      wingDip: item.wingDip,
       wingPreference:
         item.wingPreference,
+      extraSelection:
+        item.extraSelection,
       modifications:
         item.modifications,
       ingredients:
@@ -2322,8 +2250,7 @@ function validateItem(
       kitchenNote:
         def.kitchenNote || "",
       drinkIncluded:
-        def.drinkIncluded ||
-        "",
+        def.drinkIncluded || "",
       basePrice,
       extraCharges,
       itemTotal
@@ -2335,9 +2262,7 @@ function validateItem(
 // CART AND SUMMARY
 // ===============================
 
-function cartTotals(
-  items = []
-) {
+function cartTotals(items = []) {
   const subtotal = money(
     items.reduce(
       (sum, item) =>
@@ -2350,8 +2275,7 @@ function cartTotals(
   );
 
   const tax = money(
-    subtotal *
-      TAX_RATE
+    subtotal * TAX_RATE
   );
 
   const total = money(
@@ -2377,106 +2301,69 @@ function itemSummary(
   if (
     item.quantity &&
     (
-      item.family ===
-        "wings" ||
-      item.family ===
-        "boneless"
+      item.family === "wings" ||
+      item.family === "boneless" ||
+      item.family === "extra"
     )
   ) {
     parts.push(
       `${item.quantity} ${item.label}`
     );
   } else {
+    parts.push(item.label);
+  }
+
+  if (item.extraSelection) {
     parts.push(
-      item.label
+      item.extraSelection
     );
   }
 
-  if (
-    item.sauces?.length
-  ) {
+  if (item.sauces?.length) {
     parts.push(
-      `${
-        lang === "es"
-          ? "salsa"
-          : "sauce"
-      } ${item.sauces.join(", ")}`
+      `${lang === "es" ? "salsa" : "sauce"} ${item.sauces.join(", ")}`
     );
   }
 
-  if (
-    item.dips?.length
-  ) {
+  if (item.dips?.length) {
     parts.push(
-      `${
-        lang === "es"
-          ? "aderezo"
-          : "dip"
-      } ${item.dips.join(", ")}`
+      `${lang === "es" ? "aderezo" : "dip"} ${item.dips.join(", ")}`
     );
   }
 
-  if (
-    item.wingSauce
-  ) {
+  if (item.wingSauce) {
     parts.push(
-      `${
-        lang === "es"
-          ? "salsa de alitas"
-          : "wing sauce"
-      } ${item.wingSauce}`
+      `${lang === "es" ? "salsa de alitas" : "wing sauce"} ${item.wingSauce}`
     );
   }
 
-  if (
-    item.wingDip
-  ) {
+  if (item.wingDip) {
     parts.push(
-      `${
-        lang === "es"
-          ? "aderezo de alitas"
-          : "wing dip"
-      } ${item.wingDip}`
+      `${lang === "es" ? "aderezo de alitas" : "wing dip"} ${item.wingDip}`
     );
   }
 
-  if (
-    item.wingPreference
-  ) {
+  if (item.wingPreference) {
     parts.push(
       item.wingPreference
     );
   }
 
-  if (
-    item.sideChoice
-  ) {
+  if (item.sideChoice) {
     parts.push(
-      `${
-        lang === "es"
-          ? "acompañamiento"
-          : "side"
-      } ${item.sideChoice}`
+      `${lang === "es" ? "acompañamiento" : "side"} ${item.sideChoice}`
     );
   }
 
-  if (
-    item.chickenStyle
-  ) {
+  if (item.chickenStyle) {
     parts.push(
       item.chickenStyle
     );
   }
 
-  if (
-    item.protein
-  ) {
+  if (item.protein) {
     parts.push(
-      `${
-        lang === "es"
-          ? "proteína"
-          : "protein"
-      } ${item.protein}`
+      `${lang === "es" ? "proteína" : "protein"} ${item.protein}`
     );
   }
 
@@ -2487,23 +2374,13 @@ function itemSummary(
     )
   ) {
     parts.push(
-      `${
-        lang === "es"
-          ? "aderezo"
-          : "dressing"
-      } ${item.drizzle}`
+      `${lang === "es" ? "aderezo" : "dressing"} ${item.drizzle}`
     );
   }
 
-  if (
-    item.drinkType
-  ) {
+  if (item.drinkType) {
     parts.push(
-      `${
-        lang === "es"
-          ? "bebida"
-          : "drink"
-      } ${item.drinkType}`
+      `${lang === "es" ? "bebida" : "drink"} ${item.drinkType}`
     );
   }
 
@@ -2511,11 +2388,7 @@ function itemSummary(
     item.modifications?.length
   ) {
     parts.push(
-      `${
-        lang === "es"
-          ? "modificaciones"
-          : "modifications"
-      } ${item.modifications.join(", ")}`
+      `${lang === "es" ? "modificaciones" : "modifications"} ${item.modifications.join(", ")}`
     );
   }
 
@@ -2526,9 +2399,7 @@ function cartSummary(
   cart,
   lang = "en"
 ) {
-  if (
-    !cart.items.length
-  ) {
+  if (!cart.items.length) {
     return speak(
       lang,
       "The cart is empty.",
@@ -2536,11 +2407,10 @@ function cartSummary(
     );
   }
 
-  const lines =
-    cart.items.map(
-      (item, index) =>
-        `${index + 1}. ${itemSummary(item, lang)}`
-    );
+  const lines = cart.items.map(
+    (item, index) =>
+      `${index + 1}. ${itemSummary(item, lang)}`
+  );
 
   return speak(
     lang,
@@ -2553,17 +2423,12 @@ function cartSummary(
 // CUSTOMER MEMORY AND POS
 // ===============================
 
-function getCustomer(
-  phone = ""
-) {
+function getCustomer(phone = "") {
   if (!phone) {
     return null;
   }
 
-  return (
-    customers[phone] ||
-    null
-  );
+  return customers[phone] || null;
 }
 
 function updateCustomerMemory(
@@ -2588,8 +2453,7 @@ function updateCustomerMemory(
     name || current.name;
 
   current.visits += 1;
-  current.lastOrder =
-    order;
+  current.lastOrder = order;
 
   current.orders.push({
     date:
@@ -2597,16 +2461,11 @@ function updateCustomerMemory(
     order
   });
 
-  customers[phone] =
-    current;
+  customers[phone] = current;
 }
 
-async function submitToPOS(
-  order
-) {
-  if (
-    POS_MODE === "stub"
-  ) {
+async function submitToPOS(order) {
+  if (POS_MODE === "stub") {
     console.log(
       "POS STUB ORDER:",
       JSON.stringify(
@@ -2641,8 +2500,7 @@ async function submitToPOS(
 function detectTransferIntent(
   text = ""
 ) {
-  const t =
-    phraseKey(text);
+  const t = phraseKey(text);
 
   const phrases = [
     "complaint",
@@ -2678,9 +2536,7 @@ function detectTransferIntent(
   );
 }
 
-function transferResponse(
-  lang
-) {
+function transferResponse(lang) {
   return {
     success: true,
     ok: true,
@@ -2704,7 +2560,7 @@ async function handleAction(
 ) {
   const action = clean(
     payload.action ||
-      "add_item"
+    "add_item"
   );
 
   const lang =
@@ -2728,14 +2584,11 @@ async function handleAction(
       payload.text
     )
   ) {
-    return transferResponse(
-      lang
-    );
+    return transferResponse(lang);
   }
 
   if (
-    action ===
-    "get_customer"
+    action === "get_customer"
   ) {
     const customer =
       getCustomer(phone);
@@ -2779,8 +2632,7 @@ async function handleAction(
   }
 
   if (
-    action ===
-    "clear_cart"
+    action === "clear_cart"
   ) {
     cart.items = [];
 
@@ -2801,8 +2653,7 @@ async function handleAction(
   }
 
   if (
-    action ===
-    "get_cart"
+    action === "get_cart"
   ) {
     return {
       success: true,
@@ -2865,9 +2716,7 @@ async function handleAction(
     action ===
     "finalize_order"
   ) {
-    if (
-      !cart.items.length
-    ) {
+    if (!cart.items.length) {
       return fail(
         "EMPTY_CART",
         speak(
@@ -2897,24 +2746,18 @@ async function handleAction(
     const order = {
       orderId,
       sessionId,
-      phone:
-        cart.phone,
+      phone: cart.phone,
       customerName:
-        cart.customerName ||
-        "",
-      items:
-        cart.items,
+        cart.customerName || "",
+      items: cart.items,
       totals,
       createdAt:
         new Date().toISOString(),
-      orderType:
-        "pickup"
+      orderType: "pickup"
     };
 
     const posResult =
-      await submitToPOS(
-        order
-      );
+      await submitToPOS(order);
 
     updateCustomerMemory(
       cart.phone,
@@ -2922,15 +2765,11 @@ async function handleAction(
       order
     );
 
-    cart.status =
-      "finalized";
-
-    cart.orderId =
-      orderId;
+    cart.status = "finalized";
+    cart.orderId = orderId;
 
     const paymentLine =
-      totals
-        .requiresPaymentBeforePreparation
+      totals.requiresPaymentBeforePreparation
         ? speak(
             lang,
             " Because this order is over fifty dollars, payment is required before preparation.",
@@ -2955,9 +2794,7 @@ async function handleAction(
   const validation =
     validateItem(payload);
 
-  if (
-    !validation.success
-  ) {
+  if (!validation.success) {
     return validation;
   }
 
@@ -3012,13 +2849,9 @@ function getToolArguments(
     toolCall.parameters ??
     {};
 
-  if (
-    typeof args === "string"
-  ) {
+  if (typeof args === "string") {
     try {
-      return JSON.parse(
-        args
-      );
+      return JSON.parse(args);
     } catch {
       return {};
     }
@@ -3048,32 +2881,25 @@ function getToolCallId(
 // ROUTES
 // ===============================
 
-app.get(
-  "/",
-  (req, res) => {
-    res.json({
-      ok: true,
-      service:
-        "Flaps & Racks AI Cashier Backend",
-      version:
-        VERSION
-    });
-  }
-);
+app.get("/", (req, res) => {
+  res.json({
+    ok: true,
+    service:
+      "Flaps & Racks AI Cashier Backend",
+    version: VERSION
+  });
+});
 
 app.get(
   "/health",
   (req, res) => {
     res.json({
       ok: true,
-      version:
-        VERSION,
-      taxRate:
-        TAX_RATE,
+      version: VERSION,
+      taxRate: TAX_RATE,
       restaurantPhone:
         RESTAURANT_PHONE,
-      posMode:
-        POS_MODE
+      posMode: POS_MODE
     });
   }
 );
@@ -3086,9 +2912,7 @@ app.get(
       count:
         transferMessages.length,
       messages:
-        transferMessages.slice(
-          -50
-        )
+        transferMessages.slice(-50)
     });
   }
 );
@@ -3118,8 +2942,7 @@ app.post(
           );
 
         for (
-          const toolCall of
-          toolCalls
+          const toolCall of toolCalls
         ) {
           const args =
             getToolArguments(
@@ -3188,42 +3011,30 @@ app.post(
       return res.json({
         success:
           result.success,
-        ok:
-          result.ok,
-        speak:
-          result.speak,
-        result:
-          result.speak,
+        ok: result.ok,
+        speak: result.speak,
+        result: result.speak,
         item:
-          result.item ||
-          null,
+          result.item || null,
         cart:
-          result.cart ||
-          null,
+          result.cart || null,
         totals:
-          result.totals ||
-          null,
+          result.totals || null,
         customer:
-          result.customer ||
-          null,
+          result.customer || null,
         order:
-          result.order ||
-          null,
+          result.order || null,
         posResult:
-          result.posResult ||
-          null,
+          result.posResult || null,
         transfer:
-          result.transfer ||
-          false,
+          result.transfer || false,
         transferTo:
-          result.transferTo ||
-          null,
+          result.transferTo || null,
         transferMessage:
           result.transferMessage ||
           null,
         error:
-          result.error ||
-          null
+          result.error || null
       });
     } catch (err) {
       console.error(
@@ -3237,13 +3048,10 @@ app.post(
       return res.json({
         success: false,
         ok: false,
-        speak:
-          speakMessage,
-        result:
-          speakMessage,
+        speak: speakMessage,
+        result: speakMessage,
         error: {
-          code:
-            "SERVER_ERROR",
+          code: "SERVER_ERROR",
           message:
             err.message ||
             speakMessage
