@@ -12,7 +12,7 @@ import express from "express";
 const app = express();
 app.use(express.json({ limit: "1mb" }));
 
-const VERSION = "1.9-final-english-extras";
+const VERSION = "1.9.1-bilingual-compatibility";
 const PORT = process.env.PORT || 3000;
 const TAX_RATE = Number(process.env.TAX_RATE || 0.087);
 const RESTAURANT_PHONE = process.env.RESTAURANT_PHONE || "+15206582634";
@@ -700,12 +700,169 @@ function asArray(value) {
   return [value];
 }
 
+// ===============================
+// SPANISH TOTAL COMPATIBILITY
+// ===============================
+
+function spanishNumber(value, masculine = false) {
+  const n = Math.trunc(Number(value));
+
+  if (
+    !Number.isFinite(n) ||
+    n < 0 ||
+    n >= 1000000
+  ) {
+    return String(value);
+  }
+
+  const units = [
+    "cero",
+    "uno",
+    "dos",
+    "tres",
+    "cuatro",
+    "cinco",
+    "seis",
+    "siete",
+    "ocho",
+    "nueve"
+  ];
+
+  const teens = {
+    10: "diez",
+    11: "once",
+    12: "doce",
+    13: "trece",
+    14: "catorce",
+    15: "quince",
+    16: "dieciséis",
+    17: "diecisiete",
+    18: "dieciocho",
+    19: "diecinueve"
+  };
+
+  const twenties = {
+    20: "veinte",
+    21: "veintiuno",
+    22: "veintidós",
+    23: "veintitrés",
+    24: "veinticuatro",
+    25: "veinticinco",
+    26: "veintiséis",
+    27: "veintisiete",
+    28: "veintiocho",
+    29: "veintinueve"
+  };
+
+  const tens = {
+    30: "treinta",
+    40: "cuarenta",
+    50: "cincuenta",
+    60: "sesenta",
+    70: "setenta",
+    80: "ochenta",
+    90: "noventa"
+  };
+
+  const hundreds = {
+    2: "doscientos",
+    3: "trescientos",
+    4: "cuatrocientos",
+    5: "quinientos",
+    6: "seiscientos",
+    7: "setecientos",
+    8: "ochocientos",
+    9: "novecientos"
+  };
+
+  let words;
+
+  if (n < 10) {
+    words = units[n];
+  } else if (n < 20) {
+    words = teens[n];
+  } else if (n < 30) {
+    words = twenties[n];
+  } else if (n < 100) {
+    const remainder = n % 10;
+
+    words = remainder
+      ? `${tens[n - remainder]} y ${spanishNumber(remainder)}`
+      : tens[n];
+  } else if (n < 1000) {
+    if (n === 100) {
+      words = "cien";
+    } else {
+      const hundred = Math.floor(n / 100);
+      const prefix =
+        hundred === 1
+          ? "ciento"
+          : hundreds[hundred];
+      const remainder = n % 100;
+
+      words = remainder
+        ? `${prefix} ${spanishNumber(remainder)}`
+        : prefix;
+    }
+  } else {
+    const thousands = Math.floor(n / 1000);
+    const remainder = n % 1000;
+
+    const prefix =
+      thousands === 1
+        ? "mil"
+        : `${spanishNumber(thousands, true)} mil`;
+
+    words = remainder
+      ? `${prefix} ${spanishNumber(remainder)}`
+      : prefix;
+  }
+
+  return masculine
+    ? words
+        .replace(/veintiuno$/, "veintiún")
+        .replace(/uno$/, "un")
+    : words;
+}
+
+function moneyToSpanishWords(amount) {
+  const totalCents =
+    Math.round(Number(amount) * 100);
+
+  const dollars =
+    Math.floor(totalCents / 100);
+
+  const cents =
+    totalCents % 100;
+
+  const dollarLabel =
+    dollars === 1
+      ? "dólar"
+      : "dólares";
+
+  const centLabel =
+    cents === 1
+      ? "centavo"
+      : "centavos";
+
+  return `${spanishNumber(
+    dollars,
+    true
+  )} ${dollarLabel} con ${spanishNumber(
+    cents,
+    true
+  )} ${centLabel}`;
+}
+
 function speak(lang, en, es) {
   return lang === "es" ? es : en;
 }
 
 function getLanguage(payload = {}) {
-  return clean(payload.language || payload.lang) === "es"
+  return clean(
+    payload.language ||
+    payload.lang
+  ) === "es"
     ? "es"
     : "en";
 }
@@ -752,7 +909,10 @@ function ensureSession(sessionId, phone = "") {
     };
   }
 
-  if (phone && !sessions[sessionId].phone) {
+  if (
+    phone &&
+    !sessions[sessionId].phone
+  ) {
     sessions[sessionId].phone = phone;
   }
 
@@ -946,7 +1106,9 @@ function normalizeSaucePlacement(
     return "on top";
   }
 
-  if (itemId === "combo_baked_potato") {
+  if (
+    itemId === "combo_baked_potato"
+  ) {
     return "on top";
   }
 
@@ -955,9 +1117,13 @@ function normalizeSaucePlacement(
 
 function detectQuantity(text = "") {
   const t = phraseKey(text);
-  const match = t.match(/\b(48|24|18|12|9|8|6|4)\b/);
 
-  return match ? Number(match[1]) : 0;
+  const match =
+    t.match(/\b(48|24|18|12|9|8|6|4)\b/);
+
+  return match
+    ? Number(match[1])
+    : 0;
 }
 
 function extractSaucesFromText(text = "") {
@@ -993,10 +1159,15 @@ function extractSaucesFromText(text = "") {
   ];
 
   for (const phrase of saucePhrases) {
-    if (t.includes(phraseKey(phrase))) {
-      const normalized = normalizeSauce(phrase);
+    if (
+      t.includes(phraseKey(phrase))
+    ) {
+      const normalized =
+        normalizeSauce(phrase);
 
-      if (!found.includes(normalized)) {
+      if (
+        !found.includes(normalized)
+      ) {
         found.push(normalized);
       }
     }
@@ -1018,10 +1189,15 @@ function extractDipsFromText(text = "") {
   ];
 
   for (const phrase of dipPhrases) {
-    if (t.includes(phraseKey(phrase))) {
-      const normalized = normalizeDip(phrase);
+    if (
+      t.includes(phraseKey(phrase))
+    ) {
+      const normalized =
+        normalizeDip(phrase);
 
-      if (!found.includes(normalized)) {
+      if (
+        !found.includes(normalized)
+      ) {
         found.push(normalized);
       }
     }
@@ -1033,7 +1209,9 @@ function extractDipsFromText(text = "") {
 function extractSideFromText(text = "") {
   const t = phraseKey(text);
 
-  if (t.includes("buffalo ranch fries")) {
+  if (
+    t.includes("buffalo ranch fries")
+  ) {
     return "buffalo ranch fries";
   }
 
@@ -1076,14 +1254,16 @@ function extractSideFromText(text = "") {
 }
 
 function normalizeItemId(value = "") {
-  const raw = String(value || "").trim();
+  const raw =
+    String(value || "").trim();
 
   if (MENU[raw]) {
     return raw;
   }
 
-  const underscoreCandidate = phraseKey(raw)
-    .replace(/\s+/g, "_");
+  const underscoreCandidate =
+    phraseKey(raw)
+      .replace(/\s+/g, "_");
 
   if (MENU[underscoreCandidate]) {
     return underscoreCandidate;
@@ -1099,8 +1279,11 @@ function normalizeItemIdFromText(text = "") {
     return "";
   }
 
-  if (MENU[t.replace(/\s+/g, "_")]) {
-    return t.replace(/\s+/g, "_");
+  const direct =
+    t.replace(/\s+/g, "_");
+
+  if (MENU[direct]) {
+    return direct;
   }
 
   if (
@@ -1150,15 +1333,21 @@ function normalizeItemIdFromText(text = "") {
     return "combo_fish";
   }
 
-  if (t.includes("buffalo burger combo")) {
+  if (
+    t.includes("buffalo burger combo")
+  ) {
     return "combo_buffalo_burger";
   }
 
-  if (t.includes("classic burger combo")) {
+  if (
+    t.includes("classic burger combo")
+  ) {
     return "combo_classic_burger";
   }
 
-  if (t.includes("chicken sandwich combo")) {
+  if (
+    t.includes("chicken sandwich combo")
+  ) {
     return "combo_chicken_sandwich";
   }
 
@@ -1180,15 +1369,21 @@ function normalizeItemIdFromText(text = "") {
     return "extra_sauce";
   }
 
-  if (t.includes("extra beef patty")) {
+  if (
+    t.includes("extra beef patty")
+  ) {
     return "extra_beef_patty";
   }
 
-  if (t.includes("extra grilled chicken patty")) {
+  if (
+    t.includes("extra grilled chicken patty")
+  ) {
     return "extra_grilled_chicken_patty";
   }
 
-  if (t.includes("extra fried chicken patty")) {
+  if (
+    t.includes("extra fried chicken patty")
+  ) {
     return "extra_fried_chicken_patty";
   }
 
@@ -1199,7 +1394,9 @@ function normalizeItemIdFromText(text = "") {
     return "extra_boneless_chicken";
   }
 
-  if (t.includes("extra pork belly")) {
+  if (
+    t.includes("extra pork belly")
+  ) {
     return "extra_pork_belly";
   }
 
@@ -1211,11 +1408,15 @@ function normalizeItemIdFromText(text = "") {
     return "extra_cheese";
   }
 
-  if (t.includes("extra marinara")) {
+  if (
+    t.includes("extra marinara")
+  ) {
     return "extra_marinara";
   }
 
-  if (t.includes("extra sour cream")) {
+  if (
+    t.includes("extra sour cream")
+  ) {
     return "extra_sour_cream";
   }
 
@@ -1248,7 +1449,9 @@ function normalizeItemIdFromText(text = "") {
     return "side_yuca_fries";
   }
 
-  if (t.includes("baked potato")) {
+  if (
+    t.includes("baked potato")
+  ) {
     return "combo_baked_potato";
   }
 
@@ -1266,7 +1469,9 @@ function normalizeItemIdFromText(text = "") {
     return "wings_standalone";
   }
 
-  if (t.includes("pork belly fries")) {
+  if (
+    t.includes("pork belly fries")
+  ) {
     return "pork_belly_fries";
   }
 
@@ -1285,15 +1490,21 @@ function normalizeItemIdFromText(text = "") {
     return "ribs_half";
   }
 
-  if (t.includes("buffalo burger")) {
+  if (
+    t.includes("buffalo burger")
+  ) {
     return "buffalo_burger";
   }
 
-  if (t.includes("classic burger")) {
+  if (
+    t.includes("classic burger")
+  ) {
     return "classic_burger";
   }
 
-  if (t.includes("chicken sandwich")) {
+  if (
+    t.includes("chicken sandwich")
+  ) {
     return "chicken_sandwich";
   }
 
@@ -1311,16 +1522,16 @@ function normalizeItemIdFromText(text = "") {
     return "flyin_salad";
   }
 
-  if (t.includes("house salad")) {
+  if (
+    t.includes("house salad")
+  ) {
     return "house_salad";
   }
 
-  if (t.includes("chicken parmesan fries")) {
+  if (
+    t.includes("chicken parmesan fries")
+  ) {
     return "chicken_parmesan_fries";
-  }
-
-  if (t.includes("pork belly fries")) {
-    return "pork_belly_fries";
   }
 
   if (
@@ -1332,7 +1543,9 @@ function normalizeItemIdFromText(text = "") {
     return "flyin_fries";
   }
 
-  if (t.includes("buffalo ranch fries")) {
+  if (
+    t.includes("buffalo ranch fries")
+  ) {
     return "buffalo_ranch_fries";
   }
 
@@ -1384,11 +1597,15 @@ function normalizeItemIdFromText(text = "") {
     return "kids_cheeseburger";
   }
 
-  if (t.includes("sweet potato fries")) {
+  if (
+    t.includes("sweet potato fries")
+  ) {
     return "sweet_potato_fries";
   }
 
-  if (t.includes("potato salad")) {
+  if (
+    t.includes("potato salad")
+  ) {
     return "potato_salad";
   }
 
@@ -1458,8 +1675,9 @@ function normalizePayload(raw = {}) {
 
   const def = MENU[itemId] || {};
 
-  const saucesFromFields = asArray(raw.sauces)
-    .map(normalizeSauce);
+  const saucesFromFields =
+    asArray(raw.sauces)
+      .map(normalizeSauce);
 
   const saucesFromText =
     extractSaucesFromText(combinedText);
@@ -1471,8 +1689,9 @@ function normalizePayload(raw = {}) {
     ])
   ].filter(Boolean);
 
-  const dipsFromFields = asArray(raw.dips)
-    .map(normalizeDip);
+  const dipsFromFields =
+    asArray(raw.dips)
+      .map(normalizeDip);
 
   const dipsFromText =
     extractDipsFromText(combinedText);
@@ -1484,18 +1703,32 @@ function normalizePayload(raw = {}) {
     ])
   ].filter(Boolean);
 
-  const rawDressing = raw.dressing || "";
-  const rawDrizzle = raw.drizzle || "";
+  const rawDressing =
+    raw.dressing || "";
 
-  let dressing = normalizeDressing(rawDressing);
-  let drizzle = normalizeDressing(rawDrizzle);
+  const rawDrizzle =
+    raw.drizzle || "";
 
-  if (itemId === "combo_baked_potato") {
-    if (!drizzle && dressing) {
+  let dressing =
+    normalizeDressing(rawDressing);
+
+  let drizzle =
+    normalizeDressing(rawDrizzle);
+
+  if (
+    itemId === "combo_baked_potato"
+  ) {
+    if (
+      !drizzle &&
+      dressing
+    ) {
       drizzle = dressing;
     }
 
-    if (!dressing && drizzle) {
+    if (
+      !dressing &&
+      drizzle
+    ) {
       dressing = drizzle;
     }
 
@@ -1509,36 +1742,38 @@ function normalizePayload(raw = {}) {
     }
   }
 
-  const sideChoice = raw.sideChoice
-    ? normalizeSide(raw.sideChoice)
-    : extractSideFromText(combinedText);
+  const sideChoice =
+    raw.sideChoice
+      ? normalizeSide(raw.sideChoice)
+      : extractSideFromText(combinedText);
 
-  const quantity = def.pricesByQuantity
-    ? Number(
-        raw.quantity ||
-        detectQuantity(combinedText) ||
-        0
-      )
-    : def.family === "extra"
-      ? Math.max(
-          1,
-          Number(raw.quantity || 1)
+  const quantity =
+    def.pricesByQuantity
+      ? Number(
+          raw.quantity ||
+          detectQuantity(combinedText) ||
+          0
         )
-      : 0;
+      : def.family === "extra"
+        ? Math.max(
+            1,
+            Number(raw.quantity || 1)
+          )
+        : 0;
 
-  const modifications = asArray(
-    raw.modifications
-  )
-    .map(String)
-    .filter(Boolean);
+  const modifications =
+    asArray(raw.modifications)
+      .map(String)
+      .filter(Boolean);
 
-  const wingPreference = normalizeWingPreference(
-    {
-      ...raw,
-      modifications
-    },
-    combinedText
-  );
+  const wingPreference =
+    normalizeWingPreference(
+      {
+        ...raw,
+        modifications
+      },
+      combinedText
+    );
 
   return {
     ...raw,
@@ -1552,36 +1787,51 @@ function normalizePayload(raw = {}) {
       ? normalizeProtein(raw.protein)
       : "",
     chickenStyle: raw.chickenStyle
-      ? normalizeChickenStyle(raw.chickenStyle)
+      ? normalizeChickenStyle(
+          raw.chickenStyle
+        )
       : "",
     drinkType: raw.drinkType
-      ? normalizeDrinkType(raw.drinkType)
+      ? normalizeDrinkType(
+          raw.drinkType
+        )
       : "",
     dressing,
     drizzle,
-    saucePlacement: normalizeSaucePlacement(
-      raw.saucePlacement,
-      itemId
-    ),
-    cornRibsSauce: raw.cornRibsSauce
-      ? normalizeSauce(raw.cornRibsSauce)
-      : "",
-    wingSauce: raw.wingSauce
-      ? normalizeSauce(raw.wingSauce)
-      : "",
-    wingDip: raw.wingDip
-      ? normalizeDip(raw.wingDip)
-      : "",
+    saucePlacement:
+      normalizeSaucePlacement(
+        raw.saucePlacement,
+        itemId
+      ),
+    cornRibsSauce:
+      raw.cornRibsSauce
+        ? normalizeSauce(
+            raw.cornRibsSauce
+          )
+        : "",
+    wingSauce:
+      raw.wingSauce
+        ? normalizeSauce(
+            raw.wingSauce
+          )
+        : "",
+    wingDip:
+      raw.wingDip
+        ? normalizeDip(
+            raw.wingDip
+          )
+        : "",
     wingPreference,
-    extraSelection: phraseKey(
-      raw.extraSelection ||
-      raw.selection ||
-      (
-        itemId === "extra_topping"
-          ? modifications[0] || ""
-          : ""
-      )
-    ),
+    extraSelection:
+      phraseKey(
+        raw.extraSelection ||
+        raw.selection ||
+        (
+          itemId === "extra_topping"
+            ? modifications[0] || ""
+            : ""
+        )
+      ),
     modifications
   };
 }
@@ -1757,17 +2007,25 @@ function slotMissing(item, slot) {
   return false;
 }
 
-function validateRequiredSlots(item, def) {
+function validateRequiredSlots(
+  item,
+  def
+) {
   const missing = [];
 
-  for (const slot of def.requiredSlots || []) {
-    if (slotMissing(item, slot)) {
+  for (
+    const slot of def.requiredSlots || []
+  ) {
+    if (
+      slotMissing(item, slot)
+    ) {
       missing.push(slot);
     }
   }
 
   if (
-    item.itemId === "combo_baked_potato" &&
+    item.itemId ===
+      "combo_baked_potato" &&
     item.protein === "chicken" &&
     !item.chickenStyle
   ) {
@@ -1804,13 +2062,15 @@ function itemPrice(item, def) {
 }
 
 function validateItem(raw = {}) {
-  const item = normalizePayload(raw);
+  const item =
+    normalizePayload(raw);
 
   if (
     item.itemId === "combo_fish" &&
     !item.sideChoice
   ) {
-    item.sideChoice = "regular fries";
+    item.sideChoice =
+      "regular fries";
   }
 
   const lang = item.language;
@@ -1833,7 +2093,11 @@ function validateItem(raw = {}) {
     );
   }
 
-  if (item.sauces.includes("lemon pepper")) {
+  if (
+    item.sauces.includes(
+      "lemon pepper"
+    )
+  ) {
     return fail(
       "CORRECTION_REQUIRED",
       speak(
@@ -1845,10 +2109,11 @@ function validateItem(raw = {}) {
     );
   }
 
-  const missing = validateRequiredSlots(
-    item,
-    def
-  );
+  const missing =
+    validateRequiredSlots(
+      item,
+      def
+    );
 
   if (missing.length) {
     return fail(
@@ -1924,12 +2189,14 @@ function validateItem(raw = {}) {
     }
   }
 
+  const dipLikeValues = [
+    item.dressing,
+    item.drizzle,
+    item.wingDip
+  ].filter(Boolean);
+
   for (
-    const dipLike of [
-      item.dressing,
-      item.drizzle,
-      item.wingDip
-    ].filter(Boolean)
+    const dipLike of dipLikeValues
   ) {
     if (
       !DIPS.includes(dipLike) &&
@@ -1950,7 +2217,8 @@ function validateItem(raw = {}) {
   }
 
   if (
-    item.itemId === "combo_baked_potato"
+    item.itemId ===
+    "combo_baked_potato"
   ) {
     const bakedPotatoDressing =
       item.drizzle ||
@@ -1979,7 +2247,9 @@ function validateItem(raw = {}) {
 
   if (
     item.wingSauce &&
-    !SAUCES.includes(item.wingSauce)
+    !SAUCES.includes(
+      item.wingSauce
+    )
   ) {
     return fail(
       "INVALID_WING_SAUCE",
@@ -2011,7 +2281,9 @@ function validateItem(raw = {}) {
 
   if (
     def.pricesByQuantity &&
-    !def.pricesByQuantity[item.quantity]
+    !def.pricesByQuantity[
+      item.quantity
+    ]
   ) {
     return fail(
       "INVALID_QUANTITY",
@@ -2026,7 +2298,9 @@ function validateItem(raw = {}) {
 
   if (
     def.pricesByProtein &&
-    !def.pricesByProtein[item.protein]
+    !def.pricesByProtein[
+      item.protein
+    ]
   ) {
     return fail(
       "INVALID_PROTEIN",
@@ -2048,7 +2322,9 @@ function validateItem(raw = {}) {
         item.quantity
       ];
 
-    if (item.sauces.length > limit) {
+    if (
+      item.sauces.length > limit
+    ) {
       return fail(
         "TOO_MANY_SAUCES",
         speak(
@@ -2070,7 +2346,9 @@ function validateItem(raw = {}) {
         item.quantity
       ];
 
-    if (item.dips.length > limit) {
+    if (
+      item.dips.length > limit
+    ) {
       return fail(
         "TOO_MANY_DIPS",
         speak(
@@ -2086,7 +2364,8 @@ function validateItem(raw = {}) {
   if (
     def.family !== "extra" &&
     def.sauceLimit !== undefined &&
-    item.sauces.length > def.sauceLimit
+    item.sauces.length >
+      def.sauceLimit
   ) {
     return fail(
       "TOO_MANY_SAUCES",
@@ -2102,7 +2381,8 @@ function validateItem(raw = {}) {
   if (
     def.family !== "extra" &&
     def.dipLimit !== undefined &&
-    item.dips.length > def.dipLimit
+    item.dips.length >
+      def.dipLimit
   ) {
     return fail(
       "TOO_MANY_DIPS",
@@ -2135,7 +2415,9 @@ function validateItem(raw = {}) {
   const extraCharges = [];
 
   if (
-    Array.isArray(def.extraCharges)
+    Array.isArray(
+      def.extraCharges
+    )
   ) {
     extraCharges.push(
       ...def.extraCharges
@@ -2144,7 +2426,9 @@ function validateItem(raw = {}) {
 
   if (
     item.sideChoice &&
-    SIDE_UPGRADES[item.sideChoice]
+    SIDE_UPGRADES[
+      item.sideChoice
+    ]
   ) {
     extraCharges.push({
       label:
@@ -2161,7 +2445,9 @@ function validateItem(raw = {}) {
     [
       "all flats",
       "all drums"
-    ].includes(item.wingPreference)
+    ].includes(
+      item.wingPreference
+    )
   ) {
     let preferenceCharge = 0;
 
@@ -2185,10 +2471,14 @@ function validateItem(raw = {}) {
           ] || 0;
     }
 
-    if (preferenceCharge > 0) {
+    if (
+      preferenceCharge > 0
+    ) {
       extraCharges.push({
-        label: item.wingPreference,
-        amount: preferenceCharge
+        label:
+          item.wingPreference,
+        amount:
+          preferenceCharge
       });
     }
   }
@@ -2196,17 +2486,18 @@ function validateItem(raw = {}) {
   const basePrice =
     itemPrice(item, def);
 
-  const itemTotal = money(
-    basePrice +
-    extraCharges.reduce(
-      (sum, charge) =>
-        sum +
-        Number(
-          charge.amount || 0
-        ),
-      0
-    )
-  );
+  const itemTotal =
+    money(
+      basePrice +
+      extraCharges.reduce(
+        (sum, charge) =>
+          sum +
+          Number(
+            charge.amount || 0
+          ),
+        0
+      )
+    );
 
   return {
     success: true,
@@ -2223,19 +2514,25 @@ function validateItem(raw = {}) {
       quantity: item.quantity,
       sauces: item.sauces,
       dips: item.dips,
-      sideChoice: item.sideChoice,
+      sideChoice:
+        item.sideChoice,
       protein: item.protein,
       chickenStyle:
         item.chickenStyle,
-      dressing: item.dressing,
-      drizzle: item.drizzle,
+      dressing:
+        item.dressing,
+      drizzle:
+        item.drizzle,
       saucePlacement:
         item.saucePlacement,
-      drinkType: item.drinkType,
+      drinkType:
+        item.drinkType,
       cornRibsSauce:
         item.cornRibsSauce,
-      wingSauce: item.wingSauce,
-      wingDip: item.wingDip,
+      wingSauce:
+        item.wingSauce,
+      wingDip:
+        item.wingDip,
       wingPreference:
         item.wingPreference,
       extraSelection:
@@ -2245,8 +2542,7 @@ function validateItem(raw = {}) {
       ingredients:
         def.ingredients || [],
       includedAccompaniment:
-        def.includedAccompaniment ||
-        "",
+        def.includedAccompaniment || "",
       kitchenNote:
         def.kitchenNote || "",
       drinkIncluded:
@@ -2263,24 +2559,27 @@ function validateItem(raw = {}) {
 // ===============================
 
 function cartTotals(items = []) {
-  const subtotal = money(
-    items.reduce(
-      (sum, item) =>
-        sum +
-        Number(
-          item.itemTotal || 0
-        ),
-      0
-    )
-  );
+  const subtotal =
+    money(
+      items.reduce(
+        (sum, item) =>
+          sum +
+          Number(
+            item.itemTotal || 0
+          ),
+        0
+      )
+    );
 
-  const tax = money(
-    subtotal * TAX_RATE
-  );
+  const tax =
+    money(
+      subtotal * TAX_RATE
+    );
 
-  const total = money(
-    subtotal + tax
-  );
+  const total =
+    money(
+      subtotal + tax
+    );
 
   return {
     subtotal,
@@ -2319,13 +2618,17 @@ function itemSummary(
     );
   }
 
-  if (item.sauces?.length) {
+  if (
+    item.sauces?.length
+  ) {
     parts.push(
       `${lang === "es" ? "salsa" : "sauce"} ${item.sauces.join(", ")}`
     );
   }
 
-  if (item.dips?.length) {
+  if (
+    item.dips?.length
+  ) {
     parts.push(
       `${lang === "es" ? "aderezo" : "dip"} ${item.dips.join(", ")}`
     );
@@ -2343,7 +2646,9 @@ function itemSummary(
     );
   }
 
-  if (item.wingPreference) {
+  if (
+    item.wingPreference
+  ) {
     parts.push(
       item.wingPreference
     );
@@ -2355,7 +2660,9 @@ function itemSummary(
     );
   }
 
-  if (item.chickenStyle) {
+  if (
+    item.chickenStyle
+  ) {
     parts.push(
       item.chickenStyle
     );
@@ -2407,10 +2714,11 @@ function cartSummary(
     );
   }
 
-  const lines = cart.items.map(
-    (item, index) =>
-      `${index + 1}. ${itemSummary(item, lang)}`
-  );
+  const lines =
+    cart.items.map(
+      (item, index) =>
+        `${index + 1}. ${itemSummary(item, lang)}`
+    );
 
   return speak(
     lang,
@@ -2558,13 +2866,11 @@ function transferResponse(lang) {
 async function handleAction(
   payload = {}
 ) {
-  const action = clean(
-    payload.action ||
-    "add_item"
-  );
-
-  const lang =
-    getLanguage(payload);
+  const action =
+    clean(
+      payload.action ||
+      "add_item"
+    );
 
   const sessionId =
     getSessionId(payload);
@@ -2577,6 +2883,30 @@ async function handleAction(
       sessionId,
       phone
     );
+
+  const explicitLang =
+    clean(
+      payload.language ||
+      payload.lang
+    );
+
+  const lang =
+    explicitLang === "es"
+      ? "es"
+      : explicitLang === "en"
+        ? "en"
+        : cart.language === "es"
+          ? "es"
+          : "en";
+
+  if (lang === "es") {
+    cart.language = "es";
+  } else if (
+    explicitLang === "en" &&
+    cart.language
+  ) {
+    delete cart.language;
+  }
 
   if (
     payload.text &&
@@ -2757,7 +3087,9 @@ async function handleAction(
     };
 
     const posResult =
-      await submitToPOS(order);
+      await submitToPOS(
+        order
+      );
 
     updateCustomerMemory(
       cart.phone,
@@ -2765,15 +3097,19 @@ async function handleAction(
       order
     );
 
-    cart.status = "finalized";
-    cart.orderId = orderId;
+    cart.status =
+      "finalized";
+
+    cart.orderId =
+      orderId;
 
     const paymentLine =
-      totals.requiresPaymentBeforePreparation
+      totals
+        .requiresPaymentBeforePreparation
         ? speak(
             lang,
             " Because this order is over fifty dollars, payment is required before preparation.",
-            " Como esta orden es de más de cincuenta dólares, requiere pago antes de prepararla."
+            " Como esta orden es de más de cincuenta dólares, se requiere el pago antes de comenzar a prepararla."
           )
         : "";
 
@@ -2786,7 +3122,7 @@ async function handleAction(
       speak: speak(
         lang,
         `Thank you. Your pickup order has been placed. Your total is ${totals.total.toFixed(2)} dollars.${paymentLine}`,
-        `Gracias. Tu orden para recoger quedó registrada. El total es ${totals.total.toFixed(2)} dólares.${paymentLine}`
+        `Gracias. Su orden para recoger ha sido confirmada. Su total es de ${moneyToSpanishWords(totals.total)}. Aquí le esperamos.${paymentLine}`
       )
     };
   }
@@ -2794,7 +3130,9 @@ async function handleAction(
   const validation =
     validateItem(payload);
 
-  if (!validation.success) {
+  if (
+    !validation.success
+  ) {
     return validation;
   }
 
@@ -2810,8 +3148,7 @@ async function handleAction(
   return {
     success: true,
     ok: true,
-    item:
-      validation.item,
+    item: validation.item,
     cart,
     totals,
     speak: speak(
@@ -2849,7 +3186,9 @@ function getToolArguments(
     toolCall.parameters ??
     {};
 
-  if (typeof args === "string") {
+  if (
+    typeof args === "string"
+  ) {
     try {
       return JSON.parse(args);
     } catch {
@@ -2912,7 +3251,9 @@ app.get(
       count:
         transferMessages.length,
       messages:
-        transferMessages.slice(-50)
+        transferMessages.slice(
+          -50
+        )
     });
   }
 );
@@ -2942,7 +3283,8 @@ app.post(
           );
 
         for (
-          const toolCall of toolCalls
+          const toolCall
+          of toolCalls
         ) {
           const args =
             getToolArguments(
@@ -3011,9 +3353,12 @@ app.post(
       return res.json({
         success:
           result.success,
-        ok: result.ok,
-        speak: result.speak,
-        result: result.speak,
+        ok:
+          result.ok,
+        speak:
+          result.speak,
+        result:
+          result.speak,
         item:
           result.item || null,
         cart:
@@ -3031,8 +3376,7 @@ app.post(
         transferTo:
           result.transferTo || null,
         transferMessage:
-          result.transferMessage ||
-          null,
+          result.transferMessage || null,
         error:
           result.error || null
       });
@@ -3042,16 +3386,43 @@ app.post(
         err
       );
 
+      const failedToolCall =
+        getVapiToolCalls(
+          req.body
+        )[0];
+
+      const failedArgs =
+        failedToolCall
+          ? getToolArguments(
+              failedToolCall
+            )
+          : req.body || {};
+
+      const errorLang =
+        clean(
+          failedArgs.language ||
+          failedArgs.lang
+        ) === "es"
+          ? "es"
+          : "en";
+
       const speakMessage =
-        "Let me confirm that one step at a time.";
+        speak(
+          errorLang,
+          "Let me confirm that one step at a time.",
+          "Permíteme confirmar eso paso por paso."
+        );
 
       return res.json({
         success: false,
         ok: false,
-        speak: speakMessage,
-        result: speakMessage,
+        speak:
+          speakMessage,
+        result:
+          speakMessage,
         error: {
-          code: "SERVER_ERROR",
+          code:
+            "SERVER_ERROR",
           message:
             err.message ||
             speakMessage
