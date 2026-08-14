@@ -1,9 +1,10 @@
 // ===============================
-// FLAPS & RACKS AI CASHIER BACKEND V1.9 FINAL ENGLISH EXTRAS
+// FLAPS & RACKS AI CASHIER BACKEND V1.9.2 BILINGUAL MENU CORRECTIONS
 // Cart + Totals + Tucson Tax + Customer Memory + Transfer Message + POS Stub
 // Fixes: canonical itemId normalization, final-total-only speak output,
 // empty-cart finalize guard, baked potato dressing/drizzle handling,
-// fish combo alias support, side upcharges, combo payload stability.
+// fish combo alias support, side upcharges, combo payload stability,
+// corrected Flyin Burger and salad ingredient data.
 // ES MODULE VERSION FOR RAILWAY + VAPI
 // ===============================
 
@@ -12,10 +13,11 @@ import express from "express";
 const app = express();
 app.use(express.json({ limit: "1mb" }));
 
-const VERSION = "1.9.1-bilingual-compatibility";
+const VERSION = "1.9.2-bilingual-menu-corrections";
 const PORT = process.env.PORT || 3000;
 const TAX_RATE = Number(process.env.TAX_RATE || 0.087);
-const RESTAURANT_PHONE = process.env.RESTAURANT_PHONE || "+15206582634";
+const RESTAURANT_PHONE =
+  process.env.RESTAURANT_PHONE || "+15206582634";
 const POS_MODE = process.env.POS_MODE || "stub";
 
 const sessions = {};
@@ -45,8 +47,18 @@ const SAUCES = [
   "flavor of the month"
 ];
 
-const DIPS = ["ranch", "blue cheese", "chipotle ranch", "jalapeno ranch"];
-const NO_DRESSING_VALUES = ["no dressing", "no drizzle", "none"];
+const DIPS = [
+  "ranch",
+  "blue cheese",
+  "chipotle ranch",
+  "jalapeno ranch"
+];
+
+const NO_DRESSING_VALUES = [
+  "no dressing",
+  "no drizzle",
+  "none"
+];
 
 const SIDE_CHOICES = [
   "regular fries",
@@ -293,14 +305,15 @@ const MENU = {
     family: "burger",
     price: 11.55,
     ingredients: [
-      "beef patty with cheese",
-      "chicken patty with cheese",
+      "beef patty",
+      "grilled or fried chicken patty",
       "Flyin sauce",
-      "mayo",
       "lettuce",
       "tomato",
       "onion",
-      "pickles"
+      "pickles",
+      "American cheese",
+      "Swiss cheese"
     ],
     requiredSlots: ["chickenStyle"]
   },
@@ -341,6 +354,17 @@ const MENU = {
     label: "Flyin’ Burger Combo",
     family: "combo",
     price: 16.65,
+    ingredients: [
+      "beef patty",
+      "grilled or fried chicken patty",
+      "Flyin sauce",
+      "lettuce",
+      "tomato",
+      "onion",
+      "pickles",
+      "American cheese",
+      "Swiss cheese"
+    ],
     requiredSlots: ["chickenStyle", "sideChoice"],
     drinkIncluded: "24oz soft drink"
   },
@@ -369,6 +393,13 @@ const MENU = {
     label: "House Salad",
     family: "salad",
     price: 7.7,
+    ingredients: [
+      "green leafy mix",
+      "fried onions",
+      "cherry tomatoes",
+      "boiled eggs",
+      "cucumber"
+    ],
     requiredSlots: ["dressing"]
   },
 
@@ -376,6 +407,15 @@ const MENU = {
     label: "Flyin’ Salad",
     family: "salad",
     price: 11.3,
+    ingredients: [
+      "green leafy mix",
+      "fried onions",
+      "cherry tomatoes",
+      "boiled eggs",
+      "cucumber",
+      "bacon bites",
+      "grilled or fried chicken patty"
+    ],
     requiredSlots: ["chickenStyle", "dressing"]
   },
 
@@ -673,9 +713,7 @@ function phraseKey(value = "") {
 }
 
 function cleanSpeak(value = "") {
-  return String(value)
-    .replace(/\s+/g, " ")
-    .trim();
+  return String(value).replace(/\s+/g, " ").trim();
 }
 
 function money(value) {
@@ -699,10 +737,6 @@ function asArray(value) {
 
   return [value];
 }
-
-// ===============================
-// SPANISH TOTAL COMPATIBILITY
-// ===============================
 
 function spanishNumber(value, masculine = false) {
   const n = Math.trunc(Number(value));
@@ -785,19 +819,16 @@ function spanishNumber(value, masculine = false) {
     words = twenties[n];
   } else if (n < 100) {
     const remainder = n % 10;
-
     words = remainder
       ? `${tens[n - remainder]} y ${spanishNumber(remainder)}`
-      : tens[n];
+      : tens[n - remainder];
   } else if (n < 1000) {
     if (n === 100) {
       words = "cien";
     } else {
       const hundred = Math.floor(n / 100);
       const prefix =
-        hundred === 1
-          ? "ciento"
-          : hundreds[hundred];
+        hundred === 1 ? "ciento" : hundreds[hundred];
       const remainder = n % 100;
 
       words = remainder
@@ -826,24 +857,15 @@ function spanishNumber(value, masculine = false) {
 }
 
 function moneyToSpanishWords(amount) {
-  const totalCents =
-    Math.round(Number(amount) * 100);
-
-  const dollars =
-    Math.floor(totalCents / 100);
-
-  const cents =
-    totalCents % 100;
+  const totalCents = Math.round(Number(amount) * 100);
+  const dollars = Math.floor(totalCents / 100);
+  const cents = totalCents % 100;
 
   const dollarLabel =
-    dollars === 1
-      ? "dólar"
-      : "dólares";
+    dollars === 1 ? "dólar" : "dólares";
 
   const centLabel =
-    cents === 1
-      ? "centavo"
-      : "centavos";
+    cents === 1 ? "centavo" : "centavos";
 
   return `${spanishNumber(
     dollars,
@@ -859,10 +881,7 @@ function speak(lang, en, es) {
 }
 
 function getLanguage(payload = {}) {
-  return clean(
-    payload.language ||
-    payload.lang
-  ) === "es"
+  return clean(payload.language || payload.lang) === "es"
     ? "es"
     : "en";
 }
@@ -909,10 +928,7 @@ function ensureSession(sessionId, phone = "") {
     };
   }
 
-  if (
-    phone &&
-    !sessions[sessionId].phone
-  ) {
+  if (phone && !sessions[sessionId].phone) {
     sessions[sessionId].phone = phone;
   }
 
@@ -1106,9 +1122,7 @@ function normalizeSaucePlacement(
     return "on top";
   }
 
-  if (
-    itemId === "combo_baked_potato"
-  ) {
+  if (itemId === "combo_baked_potato") {
     return "on top";
   }
 
@@ -1117,13 +1131,8 @@ function normalizeSaucePlacement(
 
 function detectQuantity(text = "") {
   const t = phraseKey(text);
-
-  const match =
-    t.match(/\b(48|24|18|12|9|8|6|4)\b/);
-
-  return match
-    ? Number(match[1])
-    : 0;
+  const match = t.match(/\b(48|24|18|12|9|8|6|4)\b/);
+  return match ? Number(match[1]) : 0;
 }
 
 function extractSaucesFromText(text = "") {
@@ -1159,15 +1168,10 @@ function extractSaucesFromText(text = "") {
   ];
 
   for (const phrase of saucePhrases) {
-    if (
-      t.includes(phraseKey(phrase))
-    ) {
-      const normalized =
-        normalizeSauce(phrase);
+    if (t.includes(phraseKey(phrase))) {
+      const normalized = normalizeSauce(phrase);
 
-      if (
-        !found.includes(normalized)
-      ) {
+      if (!found.includes(normalized)) {
         found.push(normalized);
       }
     }
@@ -1189,15 +1193,10 @@ function extractDipsFromText(text = "") {
   ];
 
   for (const phrase of dipPhrases) {
-    if (
-      t.includes(phraseKey(phrase))
-    ) {
-      const normalized =
-        normalizeDip(phrase);
+    if (t.includes(phraseKey(phrase))) {
+      const normalized = normalizeDip(phrase);
 
-      if (
-        !found.includes(normalized)
-      ) {
+      if (!found.includes(normalized)) {
         found.push(normalized);
       }
     }
@@ -1209,9 +1208,7 @@ function extractDipsFromText(text = "") {
 function extractSideFromText(text = "") {
   const t = phraseKey(text);
 
-  if (
-    t.includes("buffalo ranch fries")
-  ) {
+  if (t.includes("buffalo ranch fries")) {
     return "buffalo ranch fries";
   }
 
@@ -1254,16 +1251,16 @@ function extractSideFromText(text = "") {
 }
 
 function normalizeItemId(value = "") {
-  const raw =
-    String(value || "").trim();
+  const raw = String(value || "").trim();
 
   if (MENU[raw]) {
     return raw;
   }
 
-  const underscoreCandidate =
-    phraseKey(raw)
-      .replace(/\s+/g, "_");
+  const underscoreCandidate = phraseKey(raw).replace(
+    /\s+/g,
+    "_"
+  );
 
   if (MENU[underscoreCandidate]) {
     return underscoreCandidate;
@@ -1279,11 +1276,10 @@ function normalizeItemIdFromText(text = "") {
     return "";
   }
 
-  const direct =
-    t.replace(/\s+/g, "_");
+  const directId = t.replace(/\s+/g, "_");
 
-  if (MENU[direct]) {
-    return direct;
+  if (MENU[directId]) {
+    return directId;
   }
 
   if (
@@ -1333,21 +1329,15 @@ function normalizeItemIdFromText(text = "") {
     return "combo_fish";
   }
 
-  if (
-    t.includes("buffalo burger combo")
-  ) {
+  if (t.includes("buffalo burger combo")) {
     return "combo_buffalo_burger";
   }
 
-  if (
-    t.includes("classic burger combo")
-  ) {
+  if (t.includes("classic burger combo")) {
     return "combo_classic_burger";
   }
 
-  if (
-    t.includes("chicken sandwich combo")
-  ) {
+  if (t.includes("chicken sandwich combo")) {
     return "combo_chicken_sandwich";
   }
 
@@ -1369,21 +1359,15 @@ function normalizeItemIdFromText(text = "") {
     return "extra_sauce";
   }
 
-  if (
-    t.includes("extra beef patty")
-  ) {
+  if (t.includes("extra beef patty")) {
     return "extra_beef_patty";
   }
 
-  if (
-    t.includes("extra grilled chicken patty")
-  ) {
+  if (t.includes("extra grilled chicken patty")) {
     return "extra_grilled_chicken_patty";
   }
 
-  if (
-    t.includes("extra fried chicken patty")
-  ) {
+  if (t.includes("extra fried chicken patty")) {
     return "extra_fried_chicken_patty";
   }
 
@@ -1394,9 +1378,7 @@ function normalizeItemIdFromText(text = "") {
     return "extra_boneless_chicken";
   }
 
-  if (
-    t.includes("extra pork belly")
-  ) {
+  if (t.includes("extra pork belly")) {
     return "extra_pork_belly";
   }
 
@@ -1408,15 +1390,11 @@ function normalizeItemIdFromText(text = "") {
     return "extra_cheese";
   }
 
-  if (
-    t.includes("extra marinara")
-  ) {
+  if (t.includes("extra marinara")) {
     return "extra_marinara";
   }
 
-  if (
-    t.includes("extra sour cream")
-  ) {
+  if (t.includes("extra sour cream")) {
     return "extra_sour_cream";
   }
 
@@ -1449,9 +1427,7 @@ function normalizeItemIdFromText(text = "") {
     return "side_yuca_fries";
   }
 
-  if (
-    t.includes("baked potato")
-  ) {
+  if (t.includes("baked potato")) {
     return "combo_baked_potato";
   }
 
@@ -1469,9 +1445,7 @@ function normalizeItemIdFromText(text = "") {
     return "wings_standalone";
   }
 
-  if (
-    t.includes("pork belly fries")
-  ) {
+  if (t.includes("pork belly fries")) {
     return "pork_belly_fries";
   }
 
@@ -1490,21 +1464,15 @@ function normalizeItemIdFromText(text = "") {
     return "ribs_half";
   }
 
-  if (
-    t.includes("buffalo burger")
-  ) {
+  if (t.includes("buffalo burger")) {
     return "buffalo_burger";
   }
 
-  if (
-    t.includes("classic burger")
-  ) {
+  if (t.includes("classic burger")) {
     return "classic_burger";
   }
 
-  if (
-    t.includes("chicken sandwich")
-  ) {
+  if (t.includes("chicken sandwich")) {
     return "chicken_sandwich";
   }
 
@@ -1522,16 +1490,16 @@ function normalizeItemIdFromText(text = "") {
     return "flyin_salad";
   }
 
-  if (
-    t.includes("house salad")
-  ) {
+  if (t.includes("house salad")) {
     return "house_salad";
   }
 
-  if (
-    t.includes("chicken parmesan fries")
-  ) {
+  if (t.includes("chicken parmesan fries")) {
     return "chicken_parmesan_fries";
+  }
+
+  if (t.includes("pork belly fries")) {
+    return "pork_belly_fries";
   }
 
   if (
@@ -1543,9 +1511,7 @@ function normalizeItemIdFromText(text = "") {
     return "flyin_fries";
   }
 
-  if (
-    t.includes("buffalo ranch fries")
-  ) {
+  if (t.includes("buffalo ranch fries")) {
     return "buffalo_ranch_fries";
   }
 
@@ -1597,15 +1563,11 @@ function normalizeItemIdFromText(text = "") {
     return "kids_cheeseburger";
   }
 
-  if (
-    t.includes("sweet potato fries")
-  ) {
+  if (t.includes("sweet potato fries")) {
     return "sweet_potato_fries";
   }
 
-  if (
-    t.includes("potato salad")
-  ) {
+  if (t.includes("potato salad")) {
     return "potato_salad";
   }
 
@@ -1676,8 +1638,7 @@ function normalizePayload(raw = {}) {
   const def = MENU[itemId] || {};
 
   const saucesFromFields =
-    asArray(raw.sauces)
-      .map(normalizeSauce);
+    asArray(raw.sauces).map(normalizeSauce);
 
   const saucesFromText =
     extractSaucesFromText(combinedText);
@@ -1690,8 +1651,7 @@ function normalizePayload(raw = {}) {
   ].filter(Boolean);
 
   const dipsFromFields =
-    asArray(raw.dips)
-      .map(normalizeDip);
+    asArray(raw.dips).map(normalizeDip);
 
   const dipsFromText =
     extractDipsFromText(combinedText);
@@ -1703,32 +1663,18 @@ function normalizePayload(raw = {}) {
     ])
   ].filter(Boolean);
 
-  const rawDressing =
-    raw.dressing || "";
+  const rawDressing = raw.dressing || "";
+  const rawDrizzle = raw.drizzle || "";
 
-  const rawDrizzle =
-    raw.drizzle || "";
+  let dressing = normalizeDressing(rawDressing);
+  let drizzle = normalizeDressing(rawDrizzle);
 
-  let dressing =
-    normalizeDressing(rawDressing);
-
-  let drizzle =
-    normalizeDressing(rawDrizzle);
-
-  if (
-    itemId === "combo_baked_potato"
-  ) {
-    if (
-      !drizzle &&
-      dressing
-    ) {
+  if (itemId === "combo_baked_potato") {
+    if (!drizzle && dressing) {
       drizzle = dressing;
     }
 
-    if (
-      !dressing &&
-      drizzle
-    ) {
+    if (!dressing && drizzle) {
       dressing = drizzle;
     }
 
@@ -1742,29 +1688,25 @@ function normalizePayload(raw = {}) {
     }
   }
 
-  const sideChoice =
-    raw.sideChoice
-      ? normalizeSide(raw.sideChoice)
-      : extractSideFromText(combinedText);
+  const sideChoice = raw.sideChoice
+    ? normalizeSide(raw.sideChoice)
+    : extractSideFromText(combinedText);
 
-  const quantity =
-    def.pricesByQuantity
-      ? Number(
-          raw.quantity ||
-          detectQuantity(combinedText) ||
-          0
-        )
-      : def.family === "extra"
-        ? Math.max(
-            1,
-            Number(raw.quantity || 1)
-          )
-        : 0;
+  const quantity = def.pricesByQuantity
+    ? Number(
+        raw.quantity ||
+        detectQuantity(combinedText) ||
+        0
+      )
+    : def.family === "extra"
+      ? Math.max(1, Number(raw.quantity || 1))
+      : 0;
 
-  const modifications =
-    asArray(raw.modifications)
-      .map(String)
-      .filter(Boolean);
+  const modifications = asArray(
+    raw.modifications
+  )
+    .map(String)
+    .filter(Boolean);
 
   const wingPreference =
     normalizeWingPreference(
@@ -1787,51 +1729,36 @@ function normalizePayload(raw = {}) {
       ? normalizeProtein(raw.protein)
       : "",
     chickenStyle: raw.chickenStyle
-      ? normalizeChickenStyle(
-          raw.chickenStyle
-        )
+      ? normalizeChickenStyle(raw.chickenStyle)
       : "",
     drinkType: raw.drinkType
-      ? normalizeDrinkType(
-          raw.drinkType
-        )
+      ? normalizeDrinkType(raw.drinkType)
       : "",
     dressing,
     drizzle,
-    saucePlacement:
-      normalizeSaucePlacement(
-        raw.saucePlacement,
-        itemId
-      ),
-    cornRibsSauce:
-      raw.cornRibsSauce
-        ? normalizeSauce(
-            raw.cornRibsSauce
-          )
-        : "",
-    wingSauce:
-      raw.wingSauce
-        ? normalizeSauce(
-            raw.wingSauce
-          )
-        : "",
-    wingDip:
-      raw.wingDip
-        ? normalizeDip(
-            raw.wingDip
-          )
-        : "",
+    saucePlacement: normalizeSaucePlacement(
+      raw.saucePlacement,
+      itemId
+    ),
+    cornRibsSauce: raw.cornRibsSauce
+      ? normalizeSauce(raw.cornRibsSauce)
+      : "",
+    wingSauce: raw.wingSauce
+      ? normalizeSauce(raw.wingSauce)
+      : "",
+    wingDip: raw.wingDip
+      ? normalizeDip(raw.wingDip)
+      : "",
     wingPreference,
-    extraSelection:
-      phraseKey(
-        raw.extraSelection ||
-        raw.selection ||
-        (
-          itemId === "extra_topping"
-            ? modifications[0] || ""
-            : ""
-        )
-      ),
+    extraSelection: phraseKey(
+      raw.extraSelection ||
+      raw.selection ||
+      (
+        itemId === "extra_topping"
+          ? modifications[0] || ""
+          : ""
+      )
+    ),
     modifications
   };
 }
@@ -1840,11 +1767,7 @@ function normalizePayload(raw = {}) {
 // VALIDATION AND PRICING
 // ===============================
 
-function fail(
-  code,
-  message,
-  details = []
-) {
+function fail(code, message, details = []) {
   return {
     success: false,
     ok: false,
@@ -2007,25 +1930,17 @@ function slotMissing(item, slot) {
   return false;
 }
 
-function validateRequiredSlots(
-  item,
-  def
-) {
+function validateRequiredSlots(item, def) {
   const missing = [];
 
-  for (
-    const slot of def.requiredSlots || []
-  ) {
-    if (
-      slotMissing(item, slot)
-    ) {
+  for (const slot of def.requiredSlots || []) {
+    if (slotMissing(item, slot)) {
       missing.push(slot);
     }
   }
 
   if (
-    item.itemId ===
-      "combo_baked_potato" &&
+    item.itemId === "combo_baked_potato" &&
     item.protein === "chicken" &&
     !item.chickenStyle
   ) {
@@ -2062,15 +1977,13 @@ function itemPrice(item, def) {
 }
 
 function validateItem(raw = {}) {
-  const item =
-    normalizePayload(raw);
+  const item = normalizePayload(raw);
 
   if (
     item.itemId === "combo_fish" &&
     !item.sideChoice
   ) {
-    item.sideChoice =
-      "regular fries";
+    item.sideChoice = "regular fries";
   }
 
   const lang = item.language;
@@ -2094,9 +2007,7 @@ function validateItem(raw = {}) {
   }
 
   if (
-    item.sauces.includes(
-      "lemon pepper"
-    )
+    item.sauces.includes("lemon pepper")
   ) {
     return fail(
       "CORRECTION_REQUIRED",
@@ -2110,10 +2021,7 @@ function validateItem(raw = {}) {
   }
 
   const missing =
-    validateRequiredSlots(
-      item,
-      def
-    );
+    validateRequiredSlots(item, def);
 
   if (missing.length) {
     return fail(
@@ -2189,20 +2097,16 @@ function validateItem(raw = {}) {
     }
   }
 
-  const dipLikeValues = [
+  const dressingValues = [
     item.dressing,
     item.drizzle,
     item.wingDip
   ].filter(Boolean);
 
-  for (
-    const dipLike of dipLikeValues
-  ) {
+  for (const dipLike of dressingValues) {
     if (
       !DIPS.includes(dipLike) &&
-      !NO_DRESSING_VALUES.includes(
-        dipLike
-      )
+      !NO_DRESSING_VALUES.includes(dipLike)
     ) {
       return fail(
         "INVALID_DRESSING",
@@ -2217,12 +2121,10 @@ function validateItem(raw = {}) {
   }
 
   if (
-    item.itemId ===
-    "combo_baked_potato"
+    item.itemId === "combo_baked_potato"
   ) {
     const bakedPotatoDressing =
-      item.drizzle ||
-      item.dressing;
+      item.drizzle || item.dressing;
 
     if (
       bakedPotatoDressing &&
@@ -2247,9 +2149,7 @@ function validateItem(raw = {}) {
 
   if (
     item.wingSauce &&
-    !SAUCES.includes(
-      item.wingSauce
-    )
+    !SAUCES.includes(item.wingSauce)
   ) {
     return fail(
       "INVALID_WING_SAUCE",
@@ -2264,9 +2164,7 @@ function validateItem(raw = {}) {
 
   if (
     item.cornRibsSauce &&
-    !SAUCES.includes(
-      item.cornRibsSauce
-    )
+    !SAUCES.includes(item.cornRibsSauce)
   ) {
     return fail(
       "INVALID_CORN_RIBS_SAUCE",
@@ -2281,9 +2179,7 @@ function validateItem(raw = {}) {
 
   if (
     def.pricesByQuantity &&
-    !def.pricesByQuantity[
-      item.quantity
-    ]
+    !def.pricesByQuantity[item.quantity]
   ) {
     return fail(
       "INVALID_QUANTITY",
@@ -2298,9 +2194,7 @@ function validateItem(raw = {}) {
 
   if (
     def.pricesByProtein &&
-    !def.pricesByProtein[
-      item.protein
-    ]
+    !def.pricesByProtein[item.protein]
   ) {
     return fail(
       "INVALID_PROTEIN",
@@ -2322,9 +2216,7 @@ function validateItem(raw = {}) {
         item.quantity
       ];
 
-    if (
-      item.sauces.length > limit
-    ) {
+    if (item.sauces.length > limit) {
       return fail(
         "TOO_MANY_SAUCES",
         speak(
@@ -2346,9 +2238,7 @@ function validateItem(raw = {}) {
         item.quantity
       ];
 
-    if (
-      item.dips.length > limit
-    ) {
+    if (item.dips.length > limit) {
       return fail(
         "TOO_MANY_DIPS",
         speak(
@@ -2364,8 +2254,7 @@ function validateItem(raw = {}) {
   if (
     def.family !== "extra" &&
     def.sauceLimit !== undefined &&
-    item.sauces.length >
-      def.sauceLimit
+    item.sauces.length > def.sauceLimit
   ) {
     return fail(
       "TOO_MANY_SAUCES",
@@ -2381,8 +2270,7 @@ function validateItem(raw = {}) {
   if (
     def.family !== "extra" &&
     def.dipLimit !== undefined &&
-    item.dips.length >
-      def.dipLimit
+    item.dips.length > def.dipLimit
   ) {
     return fail(
       "TOO_MANY_DIPS",
@@ -2414,11 +2302,7 @@ function validateItem(raw = {}) {
 
   const extraCharges = [];
 
-  if (
-    Array.isArray(
-      def.extraCharges
-    )
-  ) {
+  if (Array.isArray(def.extraCharges)) {
     extraCharges.push(
       ...def.extraCharges
     );
@@ -2426,34 +2310,26 @@ function validateItem(raw = {}) {
 
   if (
     item.sideChoice &&
-    SIDE_UPGRADES[
-      item.sideChoice
-    ]
+    SIDE_UPGRADES[item.sideChoice]
   ) {
     extraCharges.push({
       label:
         "Buffalo Ranch Fries combo upgrade",
       amount:
-        SIDE_UPGRADES[
-          item.sideChoice
-        ]
+        SIDE_UPGRADES[item.sideChoice]
     });
   }
 
   if (
     item.wingPreference &&
-    [
-      "all flats",
-      "all drums"
-    ].includes(
+    ["all flats", "all drums"].includes(
       item.wingPreference
     )
   ) {
     let preferenceCharge = 0;
 
     if (
-      item.itemId ===
-      "combo_8_wings"
+      item.itemId === "combo_8_wings"
     ) {
       preferenceCharge =
         WING_PREFERENCE_UPCHARGES
@@ -2461,8 +2337,7 @@ function validateItem(raw = {}) {
     }
 
     if (
-      item.itemId ===
-      "wings_standalone"
+      item.itemId === "wings_standalone"
     ) {
       preferenceCharge =
         WING_PREFERENCE_UPCHARGES
@@ -2471,14 +2346,10 @@ function validateItem(raw = {}) {
           ] || 0;
     }
 
-    if (
-      preferenceCharge > 0
-    ) {
+    if (preferenceCharge > 0) {
       extraCharges.push({
-        label:
-          item.wingPreference,
-        amount:
-          preferenceCharge
+        label: item.wingPreference,
+        amount: preferenceCharge
       });
     }
   }
@@ -2486,18 +2357,15 @@ function validateItem(raw = {}) {
   const basePrice =
     itemPrice(item, def);
 
-  const itemTotal =
-    money(
-      basePrice +
-      extraCharges.reduce(
-        (sum, charge) =>
-          sum +
-          Number(
-            charge.amount || 0
-          ),
-        0
-      )
-    );
+  const itemTotal = money(
+    basePrice +
+    extraCharges.reduce(
+      (sum, charge) =>
+        sum +
+        Number(charge.amount || 0),
+      0
+    )
+  );
 
   return {
     success: true,
@@ -2514,25 +2382,18 @@ function validateItem(raw = {}) {
       quantity: item.quantity,
       sauces: item.sauces,
       dips: item.dips,
-      sideChoice:
-        item.sideChoice,
+      sideChoice: item.sideChoice,
       protein: item.protein,
-      chickenStyle:
-        item.chickenStyle,
-      dressing:
-        item.dressing,
-      drizzle:
-        item.drizzle,
+      chickenStyle: item.chickenStyle,
+      dressing: item.dressing,
+      drizzle: item.drizzle,
       saucePlacement:
         item.saucePlacement,
-      drinkType:
-        item.drinkType,
+      drinkType: item.drinkType,
       cornRibsSauce:
         item.cornRibsSauce,
-      wingSauce:
-        item.wingSauce,
-      wingDip:
-        item.wingDip,
+      wingSauce: item.wingSauce,
+      wingDip: item.wingDip,
       wingPreference:
         item.wingPreference,
       extraSelection:
@@ -2542,7 +2403,8 @@ function validateItem(raw = {}) {
       ingredients:
         def.ingredients || [],
       includedAccompaniment:
-        def.includedAccompaniment || "",
+        def.includedAccompaniment ||
+        "",
       kitchenNote:
         def.kitchenNote || "",
       drinkIncluded:
@@ -2559,27 +2421,22 @@ function validateItem(raw = {}) {
 // ===============================
 
 function cartTotals(items = []) {
-  const subtotal =
-    money(
-      items.reduce(
-        (sum, item) =>
-          sum +
-          Number(
-            item.itemTotal || 0
-          ),
-        0
-      )
-    );
+  const subtotal = money(
+    items.reduce(
+      (sum, item) =>
+        sum +
+        Number(item.itemTotal || 0),
+      0
+    )
+  );
 
-  const tax =
-    money(
-      subtotal * TAX_RATE
-    );
+  const tax = money(
+    subtotal * TAX_RATE
+  );
 
-  const total =
-    money(
-      subtotal + tax
-    );
+  const total = money(
+    subtotal + tax
+  );
 
   return {
     subtotal,
@@ -2591,10 +2448,7 @@ function cartTotals(items = []) {
   };
 }
 
-function itemSummary(
-  item,
-  lang = "en"
-) {
+function itemSummary(item, lang = "en") {
   const parts = [];
 
   if (
@@ -2613,22 +2467,16 @@ function itemSummary(
   }
 
   if (item.extraSelection) {
-    parts.push(
-      item.extraSelection
-    );
+    parts.push(item.extraSelection);
   }
 
-  if (
-    item.sauces?.length
-  ) {
+  if (item.sauces?.length) {
     parts.push(
       `${lang === "es" ? "salsa" : "sauce"} ${item.sauces.join(", ")}`
     );
   }
 
-  if (
-    item.dips?.length
-  ) {
+  if (item.dips?.length) {
     parts.push(
       `${lang === "es" ? "aderezo" : "dip"} ${item.dips.join(", ")}`
     );
@@ -2646,12 +2494,8 @@ function itemSummary(
     );
   }
 
-  if (
-    item.wingPreference
-  ) {
-    parts.push(
-      item.wingPreference
-    );
+  if (item.wingPreference) {
+    parts.push(item.wingPreference);
   }
 
   if (item.sideChoice) {
@@ -2660,12 +2504,8 @@ function itemSummary(
     );
   }
 
-  if (
-    item.chickenStyle
-  ) {
-    parts.push(
-      item.chickenStyle
-    );
+  if (item.chickenStyle) {
+    parts.push(item.chickenStyle);
   }
 
   if (item.protein) {
@@ -2691,9 +2531,7 @@ function itemSummary(
     );
   }
 
-  if (
-    item.modifications?.length
-  ) {
+  if (item.modifications?.length) {
     parts.push(
       `${lang === "es" ? "modificaciones" : "modifications"} ${item.modifications.join(", ")}`
     );
@@ -2714,11 +2552,13 @@ function cartSummary(
     );
   }
 
-  const lines =
-    cart.items.map(
-      (item, index) =>
-        `${index + 1}. ${itemSummary(item, lang)}`
-    );
+  const lines = cart.items.map(
+    (item, index) =>
+      `${index + 1}. ${itemSummary(
+        item,
+        lang
+      )}`
+  );
 
   return speak(
     lang,
@@ -2764,8 +2604,7 @@ function updateCustomerMemory(
   current.lastOrder = order;
 
   current.orders.push({
-    date:
-      new Date().toISOString(),
+    date: new Date().toISOString(),
     order
   });
 
@@ -2776,18 +2615,13 @@ async function submitToPOS(order) {
   if (POS_MODE === "stub") {
     console.log(
       "POS STUB ORDER:",
-      JSON.stringify(
-        order,
-        null,
-        2
-      )
+      JSON.stringify(order, null, 2)
     );
 
     return {
       success: true,
       mode: "stub",
-      posOrderId:
-        order.orderId,
+      posOrderId: order.orderId,
       message:
         "Order prepared for POS submission."
     };
@@ -2866,11 +2700,9 @@ function transferResponse(lang) {
 async function handleAction(
   payload = {}
 ) {
-  const action =
-    clean(
-      payload.action ||
-      "add_item"
-    );
+  const action = clean(
+    payload.action || "add_item"
+  );
 
   const sessionId =
     getSessionId(payload);
@@ -2884,11 +2716,10 @@ async function handleAction(
       phone
     );
 
-  const explicitLang =
-    clean(
-      payload.language ||
-      payload.lang
-    );
+  const explicitLang = clean(
+    payload.language ||
+    payload.lang
+  );
 
   const lang =
     explicitLang === "es"
@@ -2917,9 +2748,7 @@ async function handleAction(
     return transferResponse(lang);
   }
 
-  if (
-    action === "get_customer"
-  ) {
+  if (action === "get_customer") {
     const customer =
       getCustomer(phone);
 
@@ -2942,8 +2771,7 @@ async function handleAction(
   }
 
   if (
-    action ===
-    "set_customer_name"
+    action === "set_customer_name"
   ) {
     cart.customerName =
       payload.customerName ||
@@ -2961,9 +2789,7 @@ async function handleAction(
     };
   }
 
-  if (
-    action === "clear_cart"
-  ) {
+  if (action === "clear_cart") {
     cart.items = [];
 
     return {
@@ -2971,9 +2797,7 @@ async function handleAction(
       ok: true,
       cart,
       totals:
-        cartTotals(
-          cart.items
-        ),
+        cartTotals(cart.items),
       speak: speak(
         lang,
         "The order has been cleared.",
@@ -2982,28 +2806,20 @@ async function handleAction(
     };
   }
 
-  if (
-    action === "get_cart"
-  ) {
+  if (action === "get_cart") {
     return {
       success: true,
       ok: true,
       cart,
       totals:
-        cartTotals(
-          cart.items
-        ),
+        cartTotals(cart.items),
       speak:
-        cartSummary(
-          cart,
-          lang
-        )
+        cartSummary(cart, lang)
     };
   }
 
   if (
-    action ===
-    "transfer_message"
+    action === "transfer_message"
   ) {
     const message = {
       sessionId,
@@ -3025,15 +2841,12 @@ async function handleAction(
         new Date().toISOString()
     };
 
-    transferMessages.push(
-      message
-    );
+    transferMessages.push(message);
 
     return {
       success: true,
       ok: true,
-      transferMessage:
-        message,
+      transferMessage: message,
       speak: speak(
         lang,
         "I saved that information and will connect you now.",
@@ -3042,10 +2855,7 @@ async function handleAction(
     };
   }
 
-  if (
-    action ===
-    "finalize_order"
-  ) {
+  if (action === "finalize_order") {
     if (!cart.items.length) {
       return fail(
         "EMPTY_CART",
@@ -3064,9 +2874,7 @@ async function handleAction(
       cart.customerName;
 
     const totals =
-      cartTotals(
-        cart.items
-      );
+      cartTotals(cart.items);
 
     const orderId =
       `FR-${Date.now()
@@ -3087,9 +2895,7 @@ async function handleAction(
     };
 
     const posResult =
-      await submitToPOS(
-        order
-      );
+      await submitToPOS(order);
 
     updateCustomerMemory(
       cart.phone,
@@ -3097,11 +2903,8 @@ async function handleAction(
       order
     );
 
-    cart.status =
-      "finalized";
-
-    cart.orderId =
-      orderId;
+    cart.status = "finalized";
+    cart.orderId = orderId;
 
     const paymentLine =
       totals
@@ -3109,7 +2912,7 @@ async function handleAction(
         ? speak(
             lang,
             " Because this order is over fifty dollars, payment is required before preparation.",
-            " Como esta orden es de más de cincuenta dólares, se requiere el pago antes de comenzar a prepararla."
+            " Como esta orden es de más de cincuenta dólares, requiere pago antes de prepararla."
           )
         : "";
 
@@ -3122,7 +2925,7 @@ async function handleAction(
       speak: speak(
         lang,
         `Thank you. Your pickup order has been placed. Your total is ${totals.total.toFixed(2)} dollars.${paymentLine}`,
-        `Gracias. Su orden para recoger ha sido confirmada. Su total es de ${moneyToSpanishWords(totals.total)}. Aquí le esperamos.${paymentLine}`
+        `Gracias. Tu orden para recoger quedó registrada. El total es ${moneyToSpanishWords(totals.total)}.${paymentLine}`
       )
     };
   }
@@ -3130,9 +2933,7 @@ async function handleAction(
   const validation =
     validateItem(payload);
 
-  if (
-    !validation.success
-  ) {
+  if (!validation.success) {
     return validation;
   }
 
@@ -3141,9 +2942,7 @@ async function handleAction(
   );
 
   const totals =
-    cartTotals(
-      cart.items
-    );
+    cartTotals(cart.items);
 
   return {
     success: true,
@@ -3186,9 +2985,7 @@ function getToolArguments(
     toolCall.parameters ??
     {};
 
-  if (
-    typeof args === "string"
-  ) {
+  if (typeof args === "string") {
     try {
       return JSON.parse(args);
     } catch {
@@ -3251,9 +3048,7 @@ app.get(
       count:
         transferMessages.length,
       messages:
-        transferMessages.slice(
-          -50
-        )
+        transferMessages.slice(-50)
     });
   }
 );
@@ -3267,20 +3062,14 @@ app.post(
           req.body
         );
 
-      if (
-        toolCalls.length > 0
-      ) {
+      if (toolCalls.length > 0) {
         const results = [];
 
         const requestSessionId =
-          getSessionId(
-            req.body
-          );
+          getSessionId(req.body);
 
         const requestPhone =
-          getPhone(
-            req.body
-          );
+          getPhone(req.body);
 
         for (
           const toolCall
@@ -3376,7 +3165,8 @@ app.post(
         transferTo:
           result.transferTo || null,
         transferMessage:
-          result.transferMessage || null,
+          result.transferMessage ||
+          null,
         error:
           result.error || null
       });
@@ -3416,13 +3206,10 @@ app.post(
       return res.json({
         success: false,
         ok: false,
-        speak:
-          speakMessage,
-        result:
-          speakMessage,
+        speak: speakMessage,
+        result: speakMessage,
         error: {
-          code:
-            "SERVER_ERROR",
+          code: "SERVER_ERROR",
           message:
             err.message ||
             speakMessage
