@@ -312,7 +312,6 @@ const MENU = {
       "tomato",
       "onion",
       "pickles",
-      "American cheese",
       "Swiss cheese"
     ],
     requiredSlots: ["chickenStyle"]
@@ -362,7 +361,6 @@ const MENU = {
       "tomato",
       "onion",
       "pickles",
-      "American cheese",
       "Swiss cheese"
     ],
     requiredSlots: ["chickenStyle", "sideChoice"],
